@@ -3,6 +3,8 @@
 轻量级 AI 编程助手 CLI，仿照 [Claude Code](https://claude.ai/code) 和 [Hermes](https://github.com/NousResearch/hermes-agent) 设计。基于 Python 构建，支持任意 OpenAI 兼容 API（DeepSeek、Claude、GPT 等），提供交互式终端界面，具备工具调用、记忆持久化和可扩展技能系统。
 目前针对deepseek-v4-pro做了测试，其他部分模型并未特殊兼容，可能有一些问题。
 
+`每个模块的详细文档都放在了目录/docs下，可以查看`
+
 ## 快速开始
 
 ```bash
