@@ -286,19 +286,30 @@ class Agent:
         if renderer:
             renderer.on_tool_result(tool_name, err_msg)
 
+    _MAX_SNAPSHOT_LINES = 20
+    _MAX_SNAPSHOT_LINE_CHARS = 2000
+
     @staticmethod
     def _snapshot_old_content(tool_name: str, args: dict, action: str) -> str | None:
-        """write_file 执行前读取旧文件内容，用于 diff 渲染。"""
+        """write_file 执行前读取旧文件前 N 行，用于 diff 渲染。"""
         if tool_name != "write_file" or action == "block":
             return None
         write_path = args.get("path", "")
         try:
-            if os.path.isfile(write_path):
-                with open(write_path, "r", encoding="utf-8", errors="replace") as f:
-                    return f.read()
+            if not os.path.isfile(write_path):
+                return None
+            lines: list[str] = []
+            with open(write_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if len(line) > Agent._MAX_SNAPSHOT_LINE_CHARS:
+                        line = line[:Agent._MAX_SNAPSHOT_LINE_CHARS] + "......\n"
+                    lines.append(line)
+                    if len(lines) >= Agent._MAX_SNAPSHOT_LINES:
+                        lines.append("......\n")
+                        break
+            return "".join(lines)
         except (OSError, UnicodeDecodeError):
-            pass
-        return None
+            return None
 
     def run_conversation(
         self,
