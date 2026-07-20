@@ -71,6 +71,17 @@ pip install dist/minihermes-*.whl      # 全局安装
 
 Python ≥ 3.11 · macOS / Linux / Windows
 
+
+## 演示
+
+![demo-1](asset/1.png)
+
+![demo-2](asset/2.png)
+
+![demo-3](asset/3.png)
+
+![demo-4](asset/4.png)
+
 ## License
 
 MIT
