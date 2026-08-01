@@ -1,0 +1,5 @@
+# MiniHermes Desktop backend dependencies
+# 安装：/Users/camille/codeProjects/miniHermes/.venv/bin/pip install -r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12.0

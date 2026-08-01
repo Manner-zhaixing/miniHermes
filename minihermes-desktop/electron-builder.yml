@@ -1,0 +1,45 @@
+# MiniHermes Desktop 打包配置
+appId: com.minihermes.desktop
+productName: MiniHermes Desktop
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - electron/**/*
+  - dist/**/*
+  - package.json
+  - "!backend/**/*"
+
+# Python 后端可执行（PyInstaller 产物）随包携带
+extraResources:
+  - from: build/backend
+    to: backend
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  # 无开发者证书时使用 ad-hoc 签名（identity: null 允许）
+  identity: null
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# GitHub 发布配置
+publish:
+  provider: github
+  owner: Manner-zhaixing
+  repo: miniHermesCode
+
+npmRebuild: false

@@ -1,0 +1,33 @@
+{
+  "name": "minihermes-desktop",
+  "version": "0.1.0",
+  "description": "MiniHermes Desktop — 基于 minihermes 内核的 AI 桌面助手",
+  "author": "minihermes",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -s first \"vite\" \"wait-on http://localhost:5173 && env -u ELECTRON_RUN_AS_NODE electron --disable-gpu --no-sandbox .\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "build:backend": "bash scripts/build_backend.sh",
+    "dist": "vite build && bash scripts/build_backend.sh && electron-builder",
+    "dist:mac": "vite build && bash scripts/build_backend.sh && electron-builder --mac",
+    "dist:dir": "vite build && bash scripts/build_backend.sh && electron-builder --dir",
+    "publish": "vite build && bash scripts/build_backend.sh && electron-builder --publish always"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.5",
+    "concurrently": "^10.0.4",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "vite": "^8.2.0",
+    "wait-on": "^9.1.0"
+  }
+}
