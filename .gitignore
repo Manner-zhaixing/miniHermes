@@ -38,3 +38,14 @@ env/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# 构建产物（PyInstaller 后端）
+build/
+
+# 打包发布产物（DMG/ZIP/.app）
+release/
