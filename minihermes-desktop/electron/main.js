@@ -11,7 +11,7 @@ const bridge = new PythonBridge();
 
 // GitHub 仓库（owner/repo），应用内"检查更新"拉取 Releases 用；
 // 可用环境变量 MH_GITHUB_REPO 覆盖（打包时临时指向其他仓库）
-const GITHUB_REPO = process.env.MH_GITHUB_REPO || 'Manner-zhaixing/miniHermesCode';
+const GITHUB_REPO = process.env.MH_GITHUB_REPO || 'Manner-zhaixing/miniHermes';
 
 // AI 应用不依赖 GPU 硬件加速；禁用可避免无 GPU 环境下崩溃
 app.disableHardwareAcceleration();
