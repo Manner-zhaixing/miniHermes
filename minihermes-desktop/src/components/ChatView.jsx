@@ -151,23 +151,13 @@ export default function ChatView({
 
   return (
     <div className="chat-view">
-      {/* 顶部工具栏：工作目录选择器 + Plan 模式开关 */}
+      {/* 顶部工具栏：工作目录选择器 */}
       <div className="chat-toolbar">
         <button className={`cwd-picker ${cwd ? '' : 'empty'}`} onClick={onChangeCwd} title="选择工作目录（Agent 的工具/文件操作基于此目录）">
           <span className="cwd-picker-ic">📁</span>
           <span className="cwd-picker-path">{cwd || '选择工作目录…'}</span>
           <span className="cwd-picker-btn">切换</span>
         </button>
-        <div className="mode-switch" title="Plan 模式：先只读分析并生成实施计划，审批后执行；普通模式：直接执行">
-          <button
-            className={`mode-btn ${mode === 'plan' ? '' : 'active'}`}
-            onClick={() => onModeChange('normal')}
-          >普通</button>
-          <button
-            className={`mode-btn ${mode === 'plan' ? 'active' : ''}`}
-            onClick={() => onModeChange('plan')}
-          >📋 Plan</button>
-        </div>
       </div>
 
       <div className="chat-header">
@@ -244,6 +234,16 @@ export default function ChatView({
             <button className="attach-btn" onClick={onAttachFile} title="上传文件（以 @file 引用注入）">
               <span className="attach-ic">📎</span>
             </button>
+            <div className="mode-switch" title="Plan 模式：先只读分析并生成实施计划，审批后执行；普通模式：直接执行">
+              <button
+                className={`mode-btn ${mode === 'plan' ? '' : 'active'}`}
+                onClick={() => onModeChange('normal')}
+              >普通</button>
+              <button
+                className={`mode-btn ${mode === 'plan' ? 'active' : ''}`}
+                onClick={() => onModeChange('plan')}
+              >📋 Plan</button>
+            </div>
             <span className="stats-model" title="当前模型">{modelName || '未配置模型'}</span>
             <TokenRing
               used={(tokens.input || 0) + (tokens.output || 0)}
