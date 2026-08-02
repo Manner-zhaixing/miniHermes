@@ -38,6 +38,20 @@ export default function ChatView({
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const modeMenuRef = useRef(null);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+
+  // 点击模式选择器外部时关闭
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const onDocClick = (e) => {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(e.target)) {
+        setModeMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [modeMenuOpen]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -234,15 +248,42 @@ export default function ChatView({
             <button className="attach-btn" onClick={onAttachFile} title="上传文件（以 @file 引用注入）">
               <span className="attach-ic">📎</span>
             </button>
-            <div className="mode-switch" title="Plan 模式：先只读分析并生成实施计划，审批后执行；普通模式：直接执行">
+            <div className="mode-picker" ref={modeMenuRef}>
               <button
-                className={`mode-btn ${mode === 'plan' ? '' : 'active'}`}
-                onClick={() => onModeChange('normal')}
-              >普通</button>
-              <button
-                className={`mode-btn ${mode === 'plan' ? 'active' : ''}`}
-                onClick={() => onModeChange('plan')}
-              >📋 Plan</button>
+                className={`mode-trigger ${mode === 'plan' ? 'plan' : ''}`}
+                onClick={() => setModeMenuOpen((v) => !v)}
+                title="对话模式：普通 或 Plan（先只读分析并生成实施计划，审批后执行）"
+              >
+                <span className="mode-trigger-ic">{mode === 'plan' ? '📋' : '⚡'}</span>
+                <span className="mode-trigger-label">{mode === 'plan' ? 'Plan 模式' : '普通模式'}</span>
+                <span className={`mode-chevron ${modeMenuOpen ? 'open' : ''}`}>▾</span>
+              </button>
+              {modeMenuOpen && (
+                <div className="mode-menu">
+                  <button
+                    className={`mode-menu-item ${mode === 'normal' ? 'active' : ''}`}
+                    onClick={() => { onModeChange('normal'); setModeMenuOpen(false); }}
+                  >
+                    <span className="mode-menu-ic">⚡</span>
+                    <span className="mode-menu-text">
+                      <span className="mode-menu-title">普通模式</span>
+                      <span className="mode-menu-desc">直接执行指令，Agent 自主调用工具</span>
+                    </span>
+                    {mode === 'normal' && <span className="mode-menu-check">✓</span>}
+                  </button>
+                  <button
+                    className={`mode-menu-item ${mode === 'plan' ? 'active' : ''}`}
+                    onClick={() => { onModeChange('plan'); setModeMenuOpen(false); }}
+                  >
+                    <span className="mode-menu-ic">📋</span>
+                    <span className="mode-menu-text">
+                      <span className="mode-menu-title">Plan 模式</span>
+                      <span className="mode-menu-desc">先只读分析生成实施计划，审批后执行</span>
+                    </span>
+                    {mode === 'plan' && <span className="mode-menu-check">✓</span>}
+                  </button>
+                </div>
+              )}
             </div>
             <span className="stats-model" title="当前模型">{modelName || '未配置模型'}</span>
             <TokenRing
