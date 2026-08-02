@@ -1,0 +1,37 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B8CFF"/>
+      <stop offset="1" stop-color="#2E5BFF"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F5F9FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角背景（macOS 图标风格：全幅圆角矩形） -->
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#bg)"/>
+
+  <!-- 气泡装饰 -->
+  <circle cx="790" cy="230" r="52" fill="url(#bubble)"/>
+  <circle cx="700" cy="170" r="26" fill="url(#bubble)"/>
+  <circle cx="880" cy="150" r="14" fill="url(#bubble)"/>
+
+  <!-- 鲸鱼身体 -->
+  <path d="M236 560C236 400 350 300 510 300C670 300 770 380 820 470C780 530 700 580 600 580C430 580 320 540 260 470C272 520 305 560 355 590C405 620 470 640 540 640C690 640 800 610 880 550C940 590 960 640 940 700C900 780 790 820 690 830C530 850 380 820 290 760C200 700 160 630 236 560Z" fill="#FFFFFF" opacity="0.16"/>
+  <path d="M210 570C210 405 330 300 500 300C670 300 780 385 830 480C788 542 706 595 600 595C430 595 318 555 258 482C270 533 304 572 354 602C404 632 468 652 540 652C690 652 805 622 885 560C942 600 965 655 943 715C902 797 790 840 690 850C528 872 378 838 288 778C198 718 152 640 210 570Z" fill="#4D6BFE"/>
+
+  <!-- 尾巴 -->
+  <path d="M830 480L1010 400L930 540L1016 560L830 500Z" fill="#4D6BFE"/>
+
+  <!-- 眼睛 -->
+  <circle cx="400" cy="470" r="36" fill="#FFFFFF"/>
+  <circle cx="410" cy="470" r="18" fill="#0B1B4D"/>
+
+  <!-- 喷水 -->
+  <path d="M520 290C520 240 560 210 600 190M495 285C470 240 455 195 460 160M470 288C425 255 405 210 410 165" stroke="#A8C8FF" strokeWidth="26" strokeLinecap="round" fill="none"/>
+
+  <!-- 底部阴影 -->
+  <ellipse cx="512" cy="920" rx="330" ry="26" fill="#000000" opacity="0.12"/>
+</svg>
