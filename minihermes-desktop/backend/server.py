@@ -46,6 +46,12 @@ from agent.agent import Agent
 from session import SessionDB
 from skills import discover_skills, load_skill_structured, sync_builtin_skills
 
+# Plan 模式（与内核 CLI 对齐）：只读规划 + 审批执行
+from cli.plan import PLAN_ALLOWED_TOOLS, PLAN_MODE_PROMPT, generate_plan_path
+
+PLAN_MODE_PREFIX = "__PLAN_MODE__:"
+PLAN_TIMEOUT = 600
+
 from gui_renderer import GuiRenderer
 
 MINIHERMES_HOME = Path.home() / ".minihermes"
@@ -64,11 +70,8 @@ BUILTIN_COMMANDS = [
     {"cmd": "/clear", "desc": "清空当前会话，新建会话", "has_arg": False, "action": "local"},
     {"cmd": "/compress", "desc": "强制触发上下文压缩", "has_arg": False, "action": "backend"},
     {"cmd": "/title", "desc": "设置当前会话标题", "has_arg": True, "action": "backend"},
-    {"cmd": "/sessions", "desc": "列出最近会话（见左侧边栏）", "has_arg": False, "action": "local"},
-    {"cmd": "/resume", "desc": "恢复历史会话", "has_arg": True, "action": "local"},
     {"cmd": "/init", "desc": "扫描项目生成 minihermes.md", "has_arg": False, "action": "backend"},
     {"cmd": "/sysprompt", "desc": "打印当前系统提示词（调试）", "has_arg": False, "action": "backend"},
-    {"cmd": "/setup", "desc": "打开设置页", "has_arg": False, "action": "local"},
     {"cmd": "/exit", "desc": "退出应用", "has_arg": False, "action": "local"},
 ]
 
@@ -378,6 +381,90 @@ class Kernel:
                 "compressed": result.compressed,
             }
 
+    # ── Plan 模式：只读规划 + 审批执行（对齐内核 CLI cli/plan.py）────────
+    def run_plan(self, sid: str, plan_description: str):
+        with self._turn_lock:
+            self.current_sid = sid
+            renderer = GuiRenderer(self._ws_send, sid)
+            self._ws_send({"type": "turn_start", "session_id": sid})
+            self._ws_send({"type": "toast", "message": "📋 进入 Plan 模式：正在只读分析并生成方案…"})
+
+            # 构建提示词（与 CLI 的 _execute_plan_mode 一致）
+            user_input = (
+                f"Create a detailed implementation plan for:\n\n"
+                f"{plan_description}\n\n"
+                f"Analyze the codebase thoroughly using read-only tools before producing the plan."
+            ) if plan_description else (
+                "The user wants you to create an implementation plan. "
+                "Ask them what they'd like to plan using the clarify tool, "
+                "then analyze the codebase and produce a detailed plan."
+            )
+
+            # Phase 1: 只读规划 Agent（复用主 Agent 的 provider/回调，只读工具 + plan prompt）
+            plan_agent = Agent(
+                provider=self.provider,
+                db=self.db,
+                clarify_callback=self.clarify_callback,
+                auto_approve=True,
+                tool_filter={"include": PLAN_ALLOWED_TOOLS},
+                system_prompt_override=(self.agent.system_prompt or "") + PLAN_MODE_PROMPT,
+                max_iterations_override=50,
+            )
+            try:
+                plan_result = plan_agent.run_conversation(
+                    user_message=user_input,
+                    history=[],
+                    renderer=renderer,
+                    session_id=sid,
+                )
+            except Exception as e:
+                self._ws_send({"type": "toast", "message": f"⚠ Plan 生成失败: {e}"})
+                self._ws_send({"type": "turn_end", "session_id": sid})
+                return
+
+            plan_text = plan_result.final_response or "(empty plan)"
+            plan_path = str(generate_plan_path(plan_description or "plan"))
+            try:
+                Path(plan_path).write_text(plan_text, encoding="utf-8")
+            except Exception:
+                pass
+            self._ws_send({"type": "toast", "message": f"📄 方案已保存: {plan_path}"})
+
+            # Phase 2: 审批（复用 RequestRegistry 阻塞等待，前端弹窗选择）
+            rid, pr = registry.create()
+            self._ws_send({
+                "type": "plan_approval_request",
+                "request_id": rid,
+                "plan_text": plan_text[:6000],
+                "plan_path": plan_path,
+            })
+            choice = registry.wait(pr, PLAN_TIMEOUT)
+            if choice != "execute":
+                self._ws_send({"type": "toast", "message": "✋ 已取消执行方案。"})
+                self._ws_send({"type": "turn_end", "session_id": sid})
+                return
+
+            # Phase 3: 执行（注入方案，走主 Agent）
+            self._ws_send({"type": "toast", "message": "▶ 已批准，开始执行方案…"})
+            exec_message = (
+                f"Execute the following approved implementation plan. "
+                f"Implement each step in order using the appropriate tools.\n\n"
+                f"---\n{plan_text}\n---"
+            )
+            history = self.db.get_messages_for_llm(sid)
+            result = self.agent.run_conversation(
+                user_message=exec_message,
+                history=history,
+                renderer=renderer,
+                session_id=sid,
+            )
+            return {
+                "final_response": result.final_response,
+                "reasoning": result.reasoning,
+                "session_id": result.session_id,
+                "compressed": result.compressed,
+            }
+
     def interrupt(self):
         self.agent.interrupt()
 
@@ -463,9 +550,30 @@ async def handle_ws_message(data: dict):
                 manager.send({"type": "toast", "message": "；".join(ref_result.warnings)})
         except Exception:
             pass
-        threading.Thread(
-            target=run_turn, args=(sid, content), daemon=True
-        ).start()
+        # Plan 模式：前端模式开关为 Plan 时自动注入 __PLAN_MODE__: 前缀
+        if content.startswith(PLAN_MODE_PREFIX):
+            plan_desc = content[len(PLAN_MODE_PREFIX):]
+            def _run_plan(sid, desc):
+                try:
+                    result = k.run_plan(sid, desc)
+                    if result:  # 执行分支正常结束后由这里发 turn_end
+                        manager.send({
+                            "type": "turn_end",
+                            "session_id": result["session_id"],
+                            "final_response": result["final_response"],
+                            "reasoning": result["reasoning"],
+                            "compressed": result["compressed"],
+                        })
+                        manager.send({"type": "sessions", "sessions": get_kernel().sessions()})
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    manager.send({"type": "error", "message": f"{type(e).__name__}: {e}"})
+            threading.Thread(target=_run_plan, args=(sid, plan_desc), daemon=True).start()
+        else:
+            threading.Thread(
+                target=run_turn, args=(sid, content), daemon=True
+            ).start()
 
     elif msg_type == "command":
         raw = data.get("cmd", "")
@@ -490,6 +598,10 @@ async def handle_ws_message(data: dict):
         registry.resolve(data.get("request_id", ""), data.get("answer"))
 
     elif msg_type == "approval_answer":
+        registry.resolve(data.get("request_id", ""), data.get("answer"))
+
+    elif msg_type == "plan_approval_answer":
+        # Plan 审批：answer ∈ {"execute", "cancel"}
         registry.resolve(data.get("request_id", ""), data.get("answer"))
 
     elif msg_type == "new_session":

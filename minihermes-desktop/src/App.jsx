@@ -7,6 +7,7 @@ import SettingsView from './components/SettingsView.jsx';
 import SkillsView from './components/SkillsView.jsx';
 import ApprovalModal from './components/ApprovalModal.jsx';
 import ClarifyModal from './components/ClarifyModal.jsx';
+import PlanApprovalModal from './components/PlanApprovalModal.jsx';
 import FilesPanel from './components/FilesPanel.jsx';
 
 let _uid = 0;
@@ -33,6 +34,8 @@ export default function App() {
   const stopRequestedRef = useRef(false);
   const interruptRetryRef = useRef(null);
   const [compressing, setCompressing] = useState(false);
+  const [mode, setMode] = useState('normal'); // 'normal' | 'plan'
+  const [planApproval, setPlanApproval] = useState(null);
 
   const messagesRef = useRef(messages);
   const activeSidRef = useRef(activeSid);
@@ -236,6 +239,7 @@ export default function App() {
 
         client.on('clarify_request', (d) => setClarify(d));
         client.on('approval_request', (d) => setApproval(d));
+        client.on('plan_approval_request', (d) => setPlanApproval(d));
 
         // 初始加载会话列表、配置与命令
         const [sessRes, cfgRes, cmdRes, cwdRes] = await Promise.all([
@@ -335,6 +339,11 @@ export default function App() {
     setApproval(null);
   }, []);
 
+  const answerPlanApproval = useCallback((requestId, answer) => {
+    clientRef.current?.send({ type: 'plan_approval_answer', request_id: requestId, answer });
+    setPlanApproval(null);
+  }, []);
+
   const answerClarify = useCallback((requestId, answer) => {
     clientRef.current?.send({ type: 'clarify_answer', request_id: requestId, answer });
     setClarify(null);
@@ -393,23 +402,6 @@ export default function App() {
       pushSystem('[history cleared — starting new session]');
       return;
     }
-    if (cmd === '/sessions') {
-      pushSystem('[会话列表见左侧边栏，点击即可切换]');
-      return;
-    }
-    if (cmd === '/resume') {
-      if (!arg) {
-        pushSystem('[usage: /resume <session-id>]');
-      } else {
-        resumeSession(arg.trim());
-        pushSystem(`[resuming session ${arg.trim()}]`);
-      }
-      return;
-    }
-    if (cmd === '/setup') {
-      setView('settings');
-      return;
-    }
     if (cmd === '/exit') {
       if (window.desktop && window.desktop.quit) window.desktop.quit();
       else window.close();
@@ -459,6 +451,8 @@ export default function App() {
               onInterrupt={interrupt}
               stopRequested={stopRequested}
               onTitleEdited={onTitleEdited}
+              mode={mode}
+              onModeChange={setMode}
             />
             {filesPanelOpen && (
               <FilesPanel
@@ -485,6 +479,12 @@ export default function App() {
         <ClarifyModal
           request={clarify}
           onAnswer={answerClarify}
+        />
+      )}
+      {planApproval && (
+        <PlanApprovalModal
+          request={planApproval}
+          onAnswer={answerPlanApproval}
         />
       )}
     </div>
