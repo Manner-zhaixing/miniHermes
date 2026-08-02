@@ -40,6 +40,6 @@ dmg:
 publish:
   provider: github
   owner: Manner-zhaixing
-  repo: miniHermesCode
+  repo: miniHermes
 
 npmRebuild: false

@@ -66,9 +66,9 @@ npm run dev
 
 ### 一次性配置（只需做一次）
 
-**1. 告诉应用去哪检查更新**（已配置为 `Manner-zhaixing/miniHermesCode`，换仓库时改这两处）：
+**1. 告诉应用去哪检查更新**（已配置为 `Manner-zhaixing/miniHermes`，换仓库时改这两处）：
 
-- `electron/main.js` 第 14 行：`const GITHUB_REPO = process.env.MH_GITHUB_REPO || 'Manner-zhaixing/miniHermesCode';`
+- `electron/main.js` 第 14 行：`const GITHUB_REPO = process.env.MH_GITHUB_REPO || 'Manner-zhaixing/miniHermes';`
   → 换仓库时改成 `'你的用户名/仓库名'`；不想改代码的话，每次打包前设置环境变量 `MH_GITHUB_REPO=你的用户名/仓库名` 也行
 - `electron-builder.yml` 第 40-43 行：`publish.owner / publish.repo` 同样改成你的仓库
 
