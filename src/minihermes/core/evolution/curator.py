@@ -20,12 +20,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from skills import USER_SKILLS_DIR, _parse_frontmatter
-from evolution.telemetry import (
+from minihermes.core.skills import USER_SKILLS_DIR, _parse_frontmatter
+from minihermes.core.evolution.telemetry import (
     get_usage, list_agent_created_skill_names,
     is_agent_created, set_state,
 )
-from tools.skill_manage import ARCHIVED_DIR
+from minihermes.core.tools.skill_manage import ARCHIVED_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ def consolidate(provider) -> Optional[str]:
     Returns:
         合并 agent 的输出摘要，或 None（未触发）。
     """
-    from agent.agent import Agent
+    from minihermes.core.agent.agent import Agent
 
     skills = _get_agent_created_skills()
     if len(skills) < 5:

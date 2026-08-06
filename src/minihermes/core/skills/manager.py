@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import MINIHERMES_HOME
+from minihermes.core.config import MINIHERMES_HOME
 
 USER_SKILLS_DIR = MINIHERMES_HOME / "skills"
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent / "_builtin_skills"

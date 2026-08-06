@@ -4,7 +4,7 @@
 """
 
 import json
-from tools import register
+from minihermes.core.tools import register
 
 _items: list[dict] = []
 

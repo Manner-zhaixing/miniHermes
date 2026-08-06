@@ -4,7 +4,7 @@ from pathlib import Path
 
 from prompt_toolkit.completion import Completer, Completion
 
-from cli.commands import SLASH_COMMANDS
+from minihermes.core.services.commands import SLASH_COMMANDS
 
 
 class SlashCommandCompleter(Completer):

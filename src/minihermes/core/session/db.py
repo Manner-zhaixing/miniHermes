@@ -190,6 +190,30 @@ class SessionDB:
             (input_tokens, output_tokens, reasoning_tokens, session_id),
         )
 
+    def get_token_stats(self, session_id: str) -> dict:
+        """从 messages 表统计会话 token 消耗（CLI 与桌面共用）。
+
+        注意：CLI 走 update_tokens 增量累加，桌面端绕过该路径，
+        因此统一在此按消息聚合，避免重复累加。
+        """
+        try:
+            cur = self._conn.execute(
+                """SELECT
+                       COALESCE(SUM(CASE WHEN role IN ('user','tool') THEN token_count ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN role = 'assistant' THEN token_count ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN reasoning IS NOT NULL THEN LENGTH(reasoning) / 4 ELSE 0 END), 0)
+                   FROM messages WHERE session_id = ?""",
+                (session_id,),
+            )
+            inp, out, reason = cur.fetchone()
+            return {
+                "input": int(inp or 0),
+                "output": int(out or 0),
+                "reasoning": int(reason or 0),
+            }
+        except Exception:
+            return {"input": 0, "output": 0, "reasoning": 0}
+
     def get_messages(self, session_id: str) -> list[dict]:
         cur = self._conn.execute(
             """SELECT role, content, tool_calls, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type

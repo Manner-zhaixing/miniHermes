@@ -12,13 +12,14 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from minihermes.core.config.config import DEFAULT_CONFIG_PATH as _DEFAULT_CONFIG_PATH
+
 _console = Console()
 
 # ── 路径常量 ──────────────────────────────────────────────────────────────────
 
 MINIHERMES_HOME = Path.home() / ".minihermes"
 _USER_CONFIG_PATH = MINIHERMES_HOME / "config.yaml"
-_DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 
 # ── 配置读写工具 ──────────────────────────────────────────────────────────────

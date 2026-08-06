@@ -12,4 +12,4 @@ CLI 模块：prompt_toolkit Application 构建与交互。
   conversation.py— 后台对话循环线程
 """
 
-from cli.layout import build_app  # noqa: F401
+from minihermes.cli.layout import build_app  # noqa: F401

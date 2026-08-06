@@ -5,8 +5,8 @@
 
 import json
 import time
-from tools import register
-from session import SessionDB
+from minihermes.core.tools import register
+from minihermes.core.session import SessionDB
 
 
 @register({

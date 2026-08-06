@@ -1,7 +1,7 @@
 [project]
 name = "minihermes"
 version = "1.1.7"
-description = "MiniHermes - A lightweight AI coding assistant CLI"
+description = "MiniHermes - A lightweight AI coding assistant (CLI + desktop backend)"
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.30.0",
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minihermes = "minihermes_cli:main"
+minihermes = "minihermes.main:main"
 
 [project.optional-dependencies]
 test = [
@@ -30,7 +30,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["minihermes_cli"]
+packages = ["src/minihermes"]
+# 包数据（config.yaml 模板 + _builtin_skills/）在包目录内，hatchling 默认随 wheel 发布
 
 [tool.uv]
 managed = true

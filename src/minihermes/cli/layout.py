@@ -10,13 +10,13 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.filters import Condition
 
-from cli.state import AppState
-from cli.styles import STYLE
-from cli.completers import SlashCommandCompleter, FileRefCompleter
-from cli.clarify import build_clarify_widget
-from cli.approval import build_approval_widget
-from cli.plan import build_plan_approval_widget
-from cli.keybindings import build_keybindings
+from minihermes.cli.state import AppState
+from minihermes.cli.styles import STYLE
+from minihermes.cli.completers import SlashCommandCompleter, FileRefCompleter
+from minihermes.cli.clarify import build_clarify_widget
+from minihermes.cli.approval import build_approval_widget
+from minihermes.cli.plan_ui import build_plan_approval_widget
+from minihermes.cli.keybindings import build_keybindings
 
 
 def _build_input_area(state: AppState) -> TextArea:

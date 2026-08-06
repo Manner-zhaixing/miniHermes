@@ -5,7 +5,7 @@ delegate_task 工具：将子任务委派给隔离的子 Agent 执行。
 （同 clarify 模式）。子 Agent 无法看到父对话历史，完成后结果作为 tool_result 返回。
 """
 
-from tools import register
+from minihermes.core.tools import register
 
 _SCHEMA = {
     "type": "function",

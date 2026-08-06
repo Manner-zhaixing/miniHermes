@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from config import MINIHERMES_HOME
+from minihermes.core.config import MINIHERMES_HOME
 
 # ── Layer 1: 默认身份（SOUL.md 不存在时的兜底）────────────────────────────────
 
@@ -399,7 +399,7 @@ def _skills_prompt_snapshot_path() -> Path:
 
 def _build_skills_manifest() -> dict:
     """Build a manifest of all SKILL.md files keyed by relative path → [mtime_ns, size]."""
-    from skills.manager import _get_skills_dirs, iter_skill_index_files
+    from minihermes.core.skills.manager import _get_skills_dirs, iter_skill_index_files
 
     manifest = {}
     for skills_dir in _get_skills_dirs():
@@ -503,7 +503,7 @@ def _get_skills_prompt_cached(
     Strategy: in-process LRU → disk snapshot (mtime validated) → filesystem scan.
     Filters skills based on conditional activation rules.
     """
-    from skills.manager import _get_skills_dirs
+    from minihermes.core.skills.manager import _get_skills_dirs
 
     skills_dirs = tuple(str(d) for d in _get_skills_dirs())
     tools_key = tuple(sorted(available_tools)) if available_tools else ()
@@ -536,7 +536,7 @@ def _get_skills_prompt_cached(
     prompt_text = _build_filtered_skills_index(available_tools, available_toolsets)
 
     # Populate disk snapshot with base (unfiltered) version for reuse
-    from skills import build_skills_index
+    from minihermes.core.skills import build_skills_index
     _write_skills_snapshot(build_skills_index())
 
     with _SKILLS_PROMPT_CACHE_LOCK:
@@ -553,10 +553,10 @@ def _build_filtered_skills_index(
     available_toolsets: Optional[set] = None,
 ) -> str:
     """Build skills index, filtering out skills that don't match conditional activation rules."""
-    from skills.manager import discover_skills, parse_frontmatter, extract_skill_conditions, _get_skills_dirs
+    from minihermes.core.skills.manager import discover_skills, parse_frontmatter, extract_skill_conditions, _get_skills_dirs
 
     if not available_tools and not available_toolsets:
-        from skills import build_skills_index
+        from minihermes.core.skills import build_skills_index
         return build_skills_index()
 
     # We need to discover with full frontmatter to check conditions

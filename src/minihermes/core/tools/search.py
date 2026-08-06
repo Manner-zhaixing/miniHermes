@@ -12,8 +12,8 @@ API 文档：https://docs.exa.ai/reference/search
 
 import json
 
-from tools import register
-import config as cfg
+from minihermes.core.tools import register
+import minihermes.core.config as cfg
 
 _search_cfg = cfg.get_search_config()
 _API_KEY = _search_cfg.get("api_key", "")

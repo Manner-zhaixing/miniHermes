@@ -17,14 +17,32 @@ MINIHERMES_HOME = Path.home() / ".minihermes"
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 _CONFIG_PATH = MINIHERMES_HOME / "config.yaml"
 
+# 首次运行配置向导钩子（CLI 在启动早期注册；桌面/无头不注册则静默补齐默认值）
+_setup_wizard = None
+
+
+def register_setup_wizard(fn):
+    """注册首次运行配置向导。
+
+    CLI 在 main 的 import 阶段尽早注册（早于任何 config 访问）；
+    桌面后端不注册，_ensure_config 会用默认模板静默补齐。
+    """
+    global _setup_wizard
+    _setup_wizard = fn
+
 
 def _ensure_config():
-    """确保 ~/.minihermes/config.yaml 存在，不存在则启动引导。"""
+    """确保 ~/.minihermes/config.yaml 存在，不存在则引导或补齐。"""
     if _CONFIG_PATH.exists():
         return
-    from config.setup_wizard import run_setup_wizard
-    if not run_setup_wizard():
-        sys.exit(0)
+    if _setup_wizard is not None:
+        if not _setup_wizard():
+            sys.exit(0)
+        return
+    # 无向导（桌面/无头场景）：用默认模板静默补齐
+    if DEFAULT_CONFIG_PATH.exists():
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_PATH.write_text(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def load() -> dict:
@@ -49,9 +67,6 @@ def load() -> dict:
             pass
 
     return user_cfg
-
-
-_cfg = load()
 
 
 class Config:

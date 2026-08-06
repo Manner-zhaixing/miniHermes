@@ -39,10 +39,10 @@
 ```bash
 # 1. 安装 Python 后端依赖（内核 venv）
 cd ../   # minihermes 项目根
-uv pip install --python .venv/bin/python -r minihermes-desktop/backend/requirements.txt
+uv pip install --python .venv/bin/python -r desktop/backend/requirements.txt
 
 # 2. 安装前端依赖
-cd minihermes-desktop
+cd desktop
 npm install
 
 # 3. 启动（自动拉起 Python 内核子进程）
@@ -81,7 +81,7 @@ gh auth login
 ### 本地打包 DMG（macOS）
 
 ```bash
-cd minihermes-desktop
+cd desktop
 
 # 一条命令搞定：前端 build + Python 后端 PyInstaller + electron-builder 出 DMG
 npm run dist:mac
@@ -99,7 +99,7 @@ npm run dist:mac
 ### 发布到 GitHub Releases（应用内"检查更新"的数据源）
 
 ```bash
-cd minihermes-desktop
+cd desktop
 
 # 1. 打 tag（版本号与 package.json 的 version 一致，应用按此比较新旧）
 git tag v0.1.0 && git push origin v0.1.0
@@ -151,7 +151,7 @@ npm run publish        # 等价于 dist:mac 后 electron-builder --publish alway
 
 ```bash
 # 终端 1：手动启动后端
-cd .. && .venv/bin/python minihermes-desktop/backend/server.py   # 输出端口
+cd .. && .venv/bin/python desktop/backend/server.py   # 输出端口
 # 终端 2：本地存储里覆盖后端地址后启动 Vite
 localStorage.setItem('mh_backend_url', 'http://127.0.0.1:<port>')
 npm run dev -- --host

@@ -3,72 +3,20 @@
 import json
 import sys
 import time
-from datetime import datetime
 from typing import Optional
-import uuid
 
-from renderer.renderer import _cprint, _DIM, _RST
-from renderer import print_resumed_history
-from session import SessionDB
-from skills import discover_skills, load_skill, load_skill_structured
-import config as cfg
-
-
-SLASH_COMMANDS: dict[str, str] = {
-    "/clear":     "Clear conversation history",
-    "/compress":  "Manually trigger context compression",
-    "/plan":      "Enter plan mode (read-only analysis, then execute)",
-    "/init":      "Scan project and generate minihermes.md",
-    "/history":   "Show current conversation length",
-    "/sessions":  "List recent sessions",
-    "/resume":    "Resume a previous session",
-    "/title":     "Set title for current session",
-    "/sysprompt": "Print current system prompt (debug)",
-    "/help":      "Show available commands",
-    "/setup":     "Interactive configuration setup",
-    "/exit":      "Exit MiniHermes",
-    "/quit":      "Exit MiniHermes",
-}
-
-
-_INIT_INSTRUCTION = """[/init] Please analyze this codebase and create a minihermes.md file at the current working directory's root.
-
-What to include:
-1. Build/run/test commands used in this project
-2. High-level architecture (the "big picture" that requires reading multiple files to understand)
-3. Key conventions or patterns that aren't obvious from a single file
-
-Guidelines:
-- Read the README.md if present, plus key config files (package.json, pyproject.toml, Cargo.toml, go.mod, etc.)
-- Use list_dir and read_file to explore structure; sample a few core source files
-- Keep it concise — focus on what a future agent needs to be productive quickly
-- Do NOT include obvious instructions ("write tests", "handle errors", "follow security best practices")
-- Do NOT enumerate every file or directory — list only what matters
-- If a CLAUDE.md / AGENTS.md / .hermes.md / README.md already exists, read it first and adapt key insights
-
-Begin the file with this exact header:
-
-# minihermes.md
-
-This file provides project context to miniHermes when working in this repository.
-
-When done, write the file using the write_file tool with path="minihermes.md", then briefly tell me what you captured.
-"""
-
-
-def generate_session_id() -> str:
-    """生成唯一 session id。"""
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    short_uuid = uuid.uuid4().hex[:6]
-    return f"{timestamp_str}_{short_uuid}"
-
-
-def register_skill_commands():
-    """启动时扫描 skills 并追加到 SLASH_COMMANDS。"""
-    for skill in discover_skills():
-        cmd = f"/{skill['name']}"
-        if cmd not in SLASH_COMMANDS:
-            SLASH_COMMANDS[cmd] = f"[skill] {skill['description']}"
+from minihermes.core.output import _cprint, _DIM, _RST
+from minihermes.cli.renderer import print_resumed_history
+from minihermes.core.session import SessionDB
+from minihermes.core.skills import load_skill, load_skill_structured
+from minihermes.core.services.commands import (
+    SLASH_COMMANDS,  # noqa: F401  (补全器引用同一对象)
+    _INIT_INSTRUCTION,
+    register_skill_commands,  # noqa: F401  (main.py 经此获取)
+    build_skill_activation_message,
+)
+from minihermes.core.services.session_service import generate_session_id
+import minihermes.core.config as cfg
 
 
 def handle_slash_command(
@@ -101,7 +49,7 @@ def handle_slash_command(
         print("[history cleared — starting new session]")
         db.end_session(session_id, end_reason="clear")
         new_id = generate_session_id()
-        from provider.provider import MODEL_NAME
+        from minihermes.core.provider.provider import MODEL_NAME
         model_name = cfg.get_model_config().get("name") or MODEL_NAME
         db.create_session(new_id, model_name,
                           model_config=json.dumps(cfg.get_model_config(), ensure_ascii=False))
@@ -205,7 +153,7 @@ def handle_slash_command(
     if command == "/setup":
         # /setup 的实际处理在 conversation.py 中通过 run_in_terminal 完成
         # 如果走到这里说明不在正常对话循环上下文中
-        from config.setup_wizard import run_setup_cli
+        from minihermes.cli.setup_wizard import run_setup_cli
         try:
             run_setup_cli()  # 无 event loop，直接运行（首次向导等场景）
         except Exception as e:
@@ -216,48 +164,7 @@ def handle_slash_command(
     skill_name = command.lstrip("/")
     skill_info = load_skill_structured(skill_name)
     if skill_info:
-        # Build rich activation message
-        lines = [
-            f"[IMPORTANT: The user has invoked the '{skill_name}' skill. "
-            f"Follow the instructions below unless the user asks otherwise.]",
-            "",
-        ]
-        # Category hint
-        if skill_info.get("category"):
-            lines.insert(0, f"[Skill category: {skill_info['category']}]")
-
-        # Supporting files hint
-        linked = skill_info.get("linked_files", {})
-        has_linked = any(v for v in linked.values())
-        if has_linked:
-            lines.append(f"[This skill has supporting files at {skill_info['skill_dir']}:]")
-            for subdir, files in linked.items():
-                if files:
-                    file_list = ", ".join(files[:5])
-                    if len(files) > 5:
-                        file_list += f" (+{len(files) - 5} more)"
-                    lines.append(f"  {subdir}/: {file_list}")
-            lines.append(f"[Use skill_view('{skill_name}', file_path='...') to load a specific file.]")
-            lines.append("")
-
-        # Platform warning
-        if not skill_info.get("platform_compatible", True):
-            lines.append("[WARNING: This skill may not be fully compatible with your current platform.]")
-            lines.append("")
-
-        # Setup warning
-        if skill_info.get("setup_needed"):
-            lines.append(f"[SETUP NEEDED: {skill_info.get('setup_note', 'Some environment variables are missing.')}]")
-            lines.append("")
-
-        # Main content
-        lines.append(skill_info["content"])
-
-        # User instruction
-        if arg:
-            lines.append(f"\n\n[User request: {arg}]")
-
-        override_msg = "\n".join(lines)
+        override_msg = build_skill_activation_message(skill_info, arg)
         return False, history, session_id, override_msg
 
     # Fallback: try old-school load_skill for backward compat

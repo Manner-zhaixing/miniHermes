@@ -12,9 +12,8 @@ import logging
 import threading
 from typing import Optional
 
-from agent.agent import Agent
-from provider import Provider
-from renderer import StreamRenderer
+from minihermes.core.agent.agent import Agent
+from minihermes.core.provider import Provider
 
 logger = logging.getLogger(__name__)
 

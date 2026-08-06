@@ -4,7 +4,7 @@
 
 import re
 import requests
-from tools import register
+from minihermes.core.tools import register
 
 _MAX_CONTENT = 50000
 

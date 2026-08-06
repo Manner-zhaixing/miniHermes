@@ -17,8 +17,8 @@
 from pathlib import Path
 from typing import Optional
 
-from tools import register
-from config import MINIHERMES_HOME
+from minihermes.core.tools import register
+from minihermes.core.config import MINIHERMES_HOME
 
 MEMORY_DIR = MINIHERMES_HOME / "memory"
 ENTRY_DELIMITER = "\n---\n"

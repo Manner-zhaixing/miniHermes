@@ -8,8 +8,8 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.filters import Condition
 
-from cli.state import AppState
-from renderer.renderer import _cprint, _DIM, _RST
+from minihermes.cli.state import AppState
+from minihermes.core.output import _cprint, _DIM, _RST
 
 
 def get_clarify_fragments(state: AppState):

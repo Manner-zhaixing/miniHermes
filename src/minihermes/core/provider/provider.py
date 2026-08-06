@@ -17,8 +17,8 @@ from typing import Callable, Optional
 import openai
 from openai import OpenAI
 
-import config as cfg
-from renderer.renderer import _cprint, _DIM, _RST, _AMBER
+import minihermes.core.config as cfg
+from minihermes.core.output import _cprint, _DIM, _RST, _AMBER
 
 
 MODEL_NAME = "deepseek-v4-pro"

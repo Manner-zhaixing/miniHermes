@@ -6,7 +6,7 @@
 import re
 import time
 
-from renderer.renderer import _cprint, _DIM, _RST, _AMBER
+from minihermes.core.output import _cprint, _DIM, _RST, _AMBER
 
 _INDENT = "    "
 
@@ -100,7 +100,7 @@ def _format_retry_result(
 
 def execute_with_retry(fn, args: dict, tool_name: str) -> str:
     """执行工具函数，对可恢复错误自动重试。"""
-    from tools import truncate_output
+    from minihermes.core.tools import truncate_output
 
     if tool_name not in RETRY_TOOLS:
         return _execute_once(fn, args)
@@ -146,7 +146,7 @@ def execute_with_retry(fn, args: dict, tool_name: str) -> str:
 
 def _execute_once(fn, args: dict) -> str:
     """单次执行工具函数，捕获所有异常转为字符串。"""
-    from tools import truncate_output
+    from minihermes.core.tools import truncate_output
 
     try:
         result = fn(**args)

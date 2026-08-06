@@ -88,7 +88,7 @@ class ToolRegistry:
         except json.JSONDecodeError as e:
             return f"Error: failed to parse tool arguments: {e}"
 
-        from tools.retry import execute_with_retry
+        from minihermes.core.tools.retry import execute_with_retry
 
         return execute_with_retry(self._registry[name]["fn"], args, name)
 

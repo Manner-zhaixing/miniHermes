@@ -11,8 +11,6 @@
 import re
 from typing import Optional
 
-from renderer import console
-
 # ── 硬拦截模式（绝对不执行）────────────────────────────────────────────────────
 
 HARDLINE_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -190,6 +188,7 @@ def _prompt_approval(tool_name: str, args: dict, description: str) -> str:
     """
     from prompt_toolkit.shortcuts import radiolist_dialog
     from prompt_toolkit.formatted_text import HTML
+    from minihermes.cli.renderer import console
 
     if tool_name == "bash":
         detail = args.get("command", "")

@@ -4,7 +4,7 @@ bash 工具：在本地 shell 中执行命令，返回 stdout + stderr。
 """
 
 import subprocess
-from tools import register
+from minihermes.core.tools import register
 
 _MAX_OUTPUT_CHARS = 50_000
 

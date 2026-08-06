@@ -15,8 +15,8 @@ from pathlib import Path
 
 import yaml
 
-from tools import register
-from skills import USER_SKILLS_DIR, discover_skills, parse_frontmatter
+from minihermes.core.tools import register
+from minihermes.core.skills import USER_SKILLS_DIR, discover_skills, parse_frontmatter
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -47,14 +47,14 @@ def _now_iso() -> str:
 
 
 def _count_agent_skills() -> int:
-    from evolution.telemetry import list_agent_created_skill_names
+    from minihermes.core.evolution.telemetry import list_agent_created_skill_names
     return len(list_agent_created_skill_names())
 
 
 def _clear_skills_cache():
     """Clear the skills system prompt cache after mutation."""
     try:
-        from prompt.builder import clear_skills_system_prompt_cache
+        from minihermes.core.prompt.builder import clear_skills_system_prompt_cache
         clear_skills_system_prompt_cache()
     except ImportError:
         pass
@@ -113,7 +113,7 @@ def _create_skill(name: str, description: str, body: str) -> str:
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md.write_text(f"---\n{frontmatter}\n---\n\n{body}", encoding="utf-8")
 
-    from evolution.telemetry import init_usage
+    from minihermes.core.evolution.telemetry import init_usage
     init_usage(name)
 
     return f"Created skill '{name}' at {skill_dir}"
@@ -151,7 +151,7 @@ def _edit_skill(name: str, body: str) -> str:
 
     skill_md.write_text(f"---\n{new_fm}\n---\n\n{body}", encoding="utf-8")
 
-    from evolution.telemetry import bump_patch
+    from minihermes.core.evolution.telemetry import bump_patch
     bump_patch(name)
 
     return f"Edited skill '{name}' successfully."
@@ -190,7 +190,7 @@ def _patch_skill(name: str, old_string: str, new_string: str) -> str:
 
     skill_md.write_text(new_content, encoding="utf-8")
 
-    from evolution.telemetry import bump_patch
+    from minihermes.core.evolution.telemetry import bump_patch
     bump_patch(name)
 
     return f"Patched skill '{name}' successfully."
@@ -205,7 +205,7 @@ def _archive_skill(name: str) -> str:
         return f"Error: skill '{name}' not found."
 
     # Check provenance — only agent-created skills can be archived by agent
-    from evolution.telemetry import is_agent_created
+    from minihermes.core.evolution.telemetry import is_agent_created
     if not is_agent_created(name):
         return f"Error: skill '{name}' is not agent-created and cannot be archived by the agent."
 
@@ -215,7 +215,7 @@ def _archive_skill(name: str) -> str:
         shutil.rmtree(dest)
     shutil.move(str(skill_dir), str(dest))
 
-    from evolution.telemetry import set_state
+    from minihermes.core.evolution.telemetry import set_state
     set_state(name, "archived")
 
     return f"Archived skill '{name}' to {dest}"
@@ -236,7 +236,7 @@ def _restore_skill(name: str) -> str:
 
     shutil.move(str(archived_path), str(dest_path))
 
-    from evolution.telemetry import set_state
+    from minihermes.core.evolution.telemetry import set_state
     set_state(name, "active")
 
     return f"Restored skill '{name}' from archive."
@@ -321,7 +321,7 @@ def _remove_skill_file(name: str, file_path: str) -> str:
 
 def _list_skills() -> str:
     """List all skills with metadata as structured JSON."""
-    from evolution.telemetry import get_usage, is_agent_created
+    from minihermes.core.evolution.telemetry import get_usage, is_agent_created
 
     skills = discover_skills()
     if not skills:

@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 import requests
 
-from tools import register
+from minihermes.core.tools import register
 
 
 def _open_in_default_viewer(path: Path) -> str | None:

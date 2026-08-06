@@ -13,9 +13,9 @@ import json
 import os
 from pathlib import Path
 
-from tools import register
-from skills import discover_skills, load_skill_structured
-from skills.preprocessing import preprocess_skill_content
+from minihermes.core.tools import register
+from minihermes.core.skills import discover_skills, load_skill_structured
+from minihermes.core.skills.preprocessing import preprocess_skill_content
 
 _SCHEMA = {
     "type": "function",
@@ -125,7 +125,7 @@ def _skill_view_impl(
 
     # Record usage
     try:
-        from evolution.telemetry import record_usage
+        from minihermes.core.evolution.telemetry import record_usage
         record_usage(name)
     except ImportError:
         pass

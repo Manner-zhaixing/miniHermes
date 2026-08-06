@@ -8,7 +8,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.filters import Condition
 
-from cli.state import AppState
+from minihermes.cli.state import AppState
 
 
 _APPROVAL_CHOICES = ["Allow once", "Allow for session", "Deny"]

@@ -9,7 +9,7 @@
 
 from typing import Any
 
-from tools.registry import ToolRegistry
+from minihermes.core.tools.registry import ToolRegistry
 
 # 默认工具注册表实例（单例）
 _default_registry = ToolRegistry()
@@ -66,13 +66,13 @@ def execute(tool_call: dict) -> str:
 
 # 导入所有工具模块，触发 @register 装饰器执行
 # （装饰器通过 _default_registry.register() 将工具写入注册表）
-from tools import bash, files, search, memory  # noqa: E402, F401
-from tools import process_tool, web_extract, session_search, todo, clarify, code_execution  # noqa: E402, F401
-from tools import skills_tool, delegate, skill_manage  # noqa: E402, F401
-from tools import image_gen, browser  # noqa: E402, F401
+from minihermes.core.tools import bash, files, search, memory  # noqa: E402, F401
+from minihermes.core.tools import process_tool, web_extract, session_search, todo, clarify, code_execution  # noqa: E402, F401
+from minihermes.core.tools import skills_tool, delegate, skill_manage  # noqa: E402, F401
+from minihermes.core.tools import image_gen, browser  # noqa: E402, F401
 
 # 注册工具特定的重试参数修改器
-from tools.retry import register_retry_modifier, ErrorClass
+from minihermes.core.tools.retry import register_retry_modifier, ErrorClass
 
 
 def _bash_retry_modifier(args: dict, attempt: int, error_class: str) -> dict:

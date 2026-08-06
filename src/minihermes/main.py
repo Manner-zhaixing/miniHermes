@@ -15,18 +15,26 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 
-from agent.agent import Agent
-from provider import Provider
-from renderer import StreamRenderer, print_welcome, print_error
-from session import SessionDB
-from cli.state import AppState
-from cli.commands import generate_session_id, register_skill_commands
-from skills import sync_builtin_skills
-from cli.clarify import make_clarify_callback
-from cli.approval import make_approval_callback
-from cli.conversation import conversation_loop
-from cli import build_app
-import config as cfg
+# 首次运行配置向导钩子：必须在任何 config 访问之前注册
+# （config 已改为延迟加载，这里提前注册保证 CLI 缺配置时走向导而非静默补齐）
+from minihermes.cli.setup_wizard import run_setup_wizard
+from minihermes.core.config import register_setup_wizard
+register_setup_wizard(run_setup_wizard)
+
+from minihermes.core.agent.agent import Agent
+from minihermes.core.provider import Provider
+from minihermes.cli.renderer import StreamRenderer, print_welcome
+from minihermes.core.output import print_error
+from minihermes.core.session import SessionDB
+from minihermes.cli.state import AppState
+from minihermes.core.services.session_service import generate_session_id
+from minihermes.core.services.commands import register_skill_commands
+from minihermes.core.skills import sync_builtin_skills
+from minihermes.cli.clarify import make_clarify_callback
+from minihermes.cli.approval import make_approval_callback
+from minihermes.cli.conversation import conversation_loop
+from minihermes.cli import build_app
+import minihermes.core.config as cfg
 
 
 # ── 换行键序列注册 ───────────────────────────────────────────────────────────
@@ -53,8 +61,8 @@ _install_newline_key_sequences()
 
 def main():
     """启动 MiniHermes 交互式 CLI。"""
-    from provider.provider import MODEL_NAME
-    from context.compressor import CONTEXT_WINDOW
+    from minihermes.core.provider.provider import MODEL_NAME
+    from minihermes.core.context.compressor import CONTEXT_WINDOW
     model_name = cfg.get_model_config().get("name") or MODEL_NAME
     context_window = CONTEXT_WINDOW
 
@@ -97,7 +105,7 @@ def main():
     )
 
     # 打印欢迎信息
-    import tools as tool_registry
+    from minihermes.core import tools as tool_registry
     print_welcome(model_name, tools=tool_registry.get_tool_manager().get_names(), cwd=os.getcwd())
 
     # 同步内置 skills 并注册 skill 斜杠命令

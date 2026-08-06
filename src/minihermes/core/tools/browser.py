@@ -3,7 +3,7 @@
 """
 
 import webbrowser
-from tools import register
+from minihermes.core.tools import register
 
 
 @register({

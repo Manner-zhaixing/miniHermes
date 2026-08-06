@@ -12,8 +12,8 @@
 import time
 from typing import Optional
 
-from provider import Provider
-from session import SessionDB
+from minihermes.core.provider import Provider
+from minihermes.core.session import SessionDB
 
 
 SUMMARY_PREFIX = (
@@ -192,7 +192,7 @@ class ContextCompressor:
         # ── Phase 5: DB session 分裂 ──────────────────────────────────
         new_session_id = session_id
         if db and session_id:
-            from cli.commands import generate_session_id
+            from minihermes.core.services.session_service import generate_session_id
 
             new_session_id = generate_session_id()
             db.create_child_session(

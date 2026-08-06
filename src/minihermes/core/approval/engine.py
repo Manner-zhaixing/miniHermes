@@ -45,7 +45,7 @@ class ApprovalEngine:
         Returns:
             ApprovalResult，action 为 allow/block/confirm。
         """
-        from tools.approval import _check_command, _check_write_file
+        from minihermes.core.tools.approval import _check_command, _check_write_file
 
         if tool_name == "bash":
             action, pattern_key, description = _check_command(
@@ -69,12 +69,12 @@ class ApprovalEngine:
 
     def add_session_approval(self, pattern_key: str):
         """将 pattern_key 加入 session 白名单（用户选了 'session' 批准）。"""
-        from tools.approval import _session_approved
+        from minihermes.core.tools.approval import _session_approved
         _session_approved.add(pattern_key)
 
     def reset_session(self):
         """清空 session 白名单（切换 session 时调用）。"""
-        from tools.approval import reset_session
+        from minihermes.core.tools.approval import reset_session
         reset_session()
 
     # ── 审批结果解析 ──────────────────────────────────────────
@@ -123,7 +123,7 @@ class ApprovalEngine:
                     tool_name, args, check_result.description
                 )
             else:
-                from tools.approval import _prompt_approval
+                from minihermes.core.tools.approval import _prompt_approval
                 choice = _prompt_approval(
                     tool_name, args, check_result.description
                 )

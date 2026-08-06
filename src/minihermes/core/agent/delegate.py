@@ -15,8 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from provider import Provider
-from renderer import SubagentRenderer
+from minihermes.core.provider import Provider
+from minihermes.core.rendering import Renderer
 
 
 # ── 数据结构 ─────────────────────────────────────────────────────────────────
@@ -67,6 +67,7 @@ _CHILD_SYSTEM_PROMPT = (
 def run_delegate(
     request: DelegationRequest,
     parent_provider: Provider,
+    renderer: Optional[Renderer] = None,
 ) -> DelegationResult:
     """同步执行一个委派任务。
 
@@ -80,7 +81,7 @@ def run_delegate(
     Returns:
         DelegationResult 包含成功状态和响应文本
     """
-    from agent.agent import Agent
+    from minihermes.core.agent.agent import Agent
 
     start_time = time.time()
 
@@ -112,7 +113,10 @@ def run_delegate(
         user_message = request.task
 
     # 子 Agent 渲染器：展示工具调用过程
-    renderer = SubagentRenderer(task_preview=request.task)
+    # 默认终端实现（延迟 import，避免核心在模块级耦合 cli）；可注入其他 Renderer
+    if renderer is None:
+        from minihermes.cli.renderer import SubagentRenderer
+        renderer = SubagentRenderer(task_preview=request.task)
 
     try:
         result = child_agent.run_conversation(

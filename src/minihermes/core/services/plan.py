@@ -1,17 +1,17 @@
-"""Plan mode: 只读规划 + 审批执行。"""
+"""Plan 模式：只读规划 + 审批执行（CLI 与桌面共用）。
+
+流程（原 cli/conversation._execute_plan_mode 与 desktop server.Kernel.run_plan 统一）：
+  1. 只读 plan agent 生成方案
+  2. 写入 .minihermes/plans/<timestamp>-<slug>.md
+  3. 审批回调（CLI TUI 面板 / 桌面 WS 弹窗）返回 execute/cancel
+  4. 批准则返回统一执行指令消息，交由调用方驱动主 Agent
+"""
 
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
-from queue import Empty, Queue
 
-from prompt_toolkit.layout import Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.containers import ConditionalContainer
-from prompt_toolkit.filters import Condition
-
-from cli.state import AppState
+from minihermes.core.agent.agent import Agent
 
 
 # ── Plan 模式允许的工具（只读）─────────────────────────────────────────────────
@@ -32,7 +32,7 @@ You are in PLAN MODE. Your job is to analyze the codebase and produce a detailed
 
 RULES:
 - You MUST NOT make any changes to files or run any commands that modify state.
-- You can ONLY read files, search code, browse the web, and use other read-only tools.
+- You CAN ONLY read files, search code, browse the web, and use other read-only tools.
 - Analyze the codebase thoroughly before producing the plan.
 
 Your final response MUST be a complete implementation plan in markdown format with:
@@ -43,6 +43,10 @@ Your final response MUST be a complete implementation plan in markdown format wi
 
 Be specific: include file paths, function names, and describe exact changes needed.
 """
+
+# 用户输入前缀：CLI 的 /plan 命令与桌面 Plan 模式开关都通过该前缀注入
+PLAN_MODE_PREFIX = "__PLAN_MODE__:"
+
 
 # ── Plan 文件路径生成 ──────────────────────────────────────────────────────────
 
@@ -58,114 +62,84 @@ def generate_plan_path(description: str) -> Path:
     return plan_dir / filename
 
 
-# ── Plan 审批 UI ──────────────────────────────────────────────────────────────
+# ── Plan agent 输入消息 ────────────────────────────────────────────────────────
 
-_PLAN_CHOICES = ["Execute this plan", "Cancel"]
-_PLAN_KEYS = ["execute", "cancel"]
-
-
-def get_plan_approval_fragments(state: AppState):
-    """构建 plan 审批面板的 prompt_toolkit 片段。"""
-    if not state.plan_approval_state:
-        return []
-
-    plan_path = state.plan_approval_state.get("plan_path", "")
-    plan_text = state.plan_approval_state.get("plan_text", "")
-    selected = state.plan_approval_state.get("selected", 0)
-
-    title = "Plan Ready"
-    path_display = str(plan_path)
-
-    preview_lines = plan_text.strip().split("\n")[:3]
-    preview = " | ".join(line.strip() for line in preview_lines if line.strip())
-    if len(preview) > 70:
-        preview = preview[:67] + "..."
-
-    content_lines = [title, path_display, preview, "↑↓ move · Enter confirm · Ctrl-C cancel"]
-    for c in _PLAN_CHOICES:
-        content_lines.append(f"❯ {c}")
-    longest = max(len(line) for line in content_lines if line)
-    term_cols = shutil.get_terminal_size((80, 24)).columns
-    inner_width = min(max(longest + 2, 44), 72, max(30, term_cols - 6))
-    box_width = inner_width + 2
-
-    def _pad(text: str) -> str:
-        if len(text) > inner_width:
-            text = text[:inner_width - 3] + "..."
-        return text.ljust(inner_width)
-
-    lines = []
-    lines.append(("class:approval-border", "╭" + "─" * box_width + "╮\n"))
-
-    lines.append(("class:approval-border", "│ "))
-    lines.append(("class:approval-title", _pad(title)))
-    lines.append(("class:approval-border", " │\n"))
-
-    lines.append(("class:approval-border", "│" + " " * box_width + "│\n"))
-
-    lines.append(("class:approval-border", "│ "))
-    lines.append(("class:approval-cmd", _pad(path_display)))
-    lines.append(("class:approval-border", " │\n"))
-
-    if preview:
-        lines.append(("class:approval-border", "│ "))
-        lines.append(("class:approval-hint", _pad(preview)))
-        lines.append(("class:approval-border", " │\n"))
-
-    lines.append(("class:approval-border", "│" + " " * box_width + "│\n"))
-
-    for i, choice in enumerate(_PLAN_CHOICES):
-        prefix = "❯" if i == selected else " "
-        label = f"{prefix} {i + 1}. {choice}"
-        style = "class:approval-selected" if i == selected else "class:approval-choice"
-        lines.append(("class:approval-border", "│ "))
-        lines.append((style, _pad(label)))
-        lines.append(("class:approval-border", " │\n"))
-
-    lines.append(("class:approval-border", "│ "))
-    lines.append(("class:approval-hint", _pad("↑↓ move · Enter confirm · Ctrl-C cancel")))
-    lines.append(("class:approval-border", " │\n"))
-
-    lines.append(("class:approval-border", "╰" + "─" * box_width + "╯\n"))
-    return lines
-
-
-def build_plan_approval_widget(state: AppState):
-    """构建 plan 审批 ConditionalContainer widget。"""
-    return ConditionalContainer(
-        Window(
-            content=FormattedTextControl(lambda: get_plan_approval_fragments(state)),
-            wrap_lines=True,
-        ),
-        filter=Condition(lambda: state.plan_approval_state is not None),
+def build_plan_user_message(plan_description: str) -> str:
+    """构建 plan agent 的用户消息（CLI 与桌面保持一致）。"""
+    if plan_description:
+        return (
+            f"Create a detailed implementation plan for:\n\n"
+            f"{plan_description}\n\n"
+            f"Analyze the codebase thoroughly using read-only tools before producing the plan."
+        )
+    return (
+        "The user wants you to create an implementation plan. "
+        "Ask them what they'd like to plan using the clarify tool, "
+        "then analyze the codebase and produce a detailed plan."
     )
 
 
-def make_plan_approval_callback(state: AppState):
-    """工厂函数：生成 plan 审批回调，阻塞等待用户选择。"""
+# ── 统一三阶段流程 ─────────────────────────────────────────────────────────────
 
-    def _plan_approval_callback(plan_text: str, plan_path: str) -> str:
-        response_queue: Queue = Queue()
+def run_plan_flow(
+    *,
+    provider,
+    db,
+    renderer,
+    session_id: str,
+    plan_description: str,
+    base_system_prompt: str,
+    clarify_callback=None,
+    approval,
+    on_plan_saved=None,
+    max_iterations_override: int = 50,
+) -> str | None:
+    """Plan 三阶段流程共享实现（只读规划 → 存盘 → 审批）。
 
-        state.plan_approval_state = {
-            "plan_text": plan_text,
-            "plan_path": plan_path,
-            "selected": 0,
-            "response_queue": response_queue,
-        }
-        state.invalidate()
+    Args:
+        provider:            主 Agent 的 Provider（plan agent 复用）
+        db:                  SessionDB
+        renderer:            Renderer 实例（CLI StreamRenderer / 桌面 GuiRenderer）
+        session_id:          当前会话
+        plan_description:    用户要规划的任务描述
+        base_system_prompt:  主 Agent 的 system prompt（plan agent 追加 PLAN_MODE_PROMPT）
+        clarify_callback:    透传给 plan agent
+        approval:            Callable[[plan_text, plan_path], "execute"|"cancel"]
+        on_plan_saved:       Callable[[Path], None] — 方案落盘后的通知（CLI 打印 / 桌面 toast）
+        max_iterations_override: plan agent 迭代预算（默认 50）
 
-        while not state.should_exit:
-            try:
-                response = response_queue.get(timeout=1)
-                state.clear_plan_approval()
-                state.invalidate()
-                return response
-            except Empty:
-                state.invalidate()
+    Returns:
+        批准后返回"执行指令消息"，调用方应交给主 Agent 执行；取消/失败返回 None。
+    """
+    plan_agent = Agent(
+        provider=provider,
+        db=db,
+        clarify_callback=clarify_callback,
+        auto_approve=True,
+        tool_filter={"include": PLAN_ALLOWED_TOOLS},
+        system_prompt_override=(base_system_prompt or "") + PLAN_MODE_PROMPT,
+        max_iterations_override=max_iterations_override,
+    )
 
-        state.clear_plan_approval()
-        state.invalidate()
-        return "cancel"
+    plan_result = plan_agent.run_conversation(
+        user_message=build_plan_user_message(plan_description),
+        history=[],
+        renderer=renderer,
+        session_id=session_id,
+    )
 
-    return _plan_approval_callback
+    plan_text = plan_result.final_response or "(empty plan)"
+    plan_path = generate_plan_path(plan_description)
+    plan_path.write_text(plan_text, encoding="utf-8")
+    if on_plan_saved:
+        on_plan_saved(plan_path)
+
+    choice = approval(plan_text, str(plan_path))
+    if choice != "execute":
+        return None
+
+    return (
+        f"Execute the following approved implementation plan. "
+        f"Implement each step in order using the appropriate tools.\n\n"
+        f"---\n{plan_text}\n---"
+    )

@@ -43,7 +43,7 @@ bash build_wheel.sh                    # 构建 wheel 包到 dist/
 pip install dist/minihermes-*.whl      # 全局安装
 ```
 
-构建脚本将源码模块复制到 `minihermes_cli/app/`，通过 hatchling 打包为标准 wheel，安装后 `minihermes` 命令全局可用。
+hatchling 直接打包 `src/minihermes`（含 `cli/`、`core/`、`core/services/` 与 `_builtin_skills`、`config.yaml` 包数据），安装后 `minihermes` 命令全局可用。
 
 ## 主要特性
 

@@ -1,7 +1,7 @@
 """
 GuiRenderer: 桌面端渲染器。
 
-实现 minihermes 内核 StreamRenderer 的接口（鸭子类型）：
+实现 minihermes.core.rendering.Renderer 接口（Protocol / 鸭子类型）：
     reset / on_thinking / on_delta / on_tool_start / on_tool_result / finalize
 
 职责：把 Agent 对话循环产生的流式事件实时转发到前端 WebSocket，
@@ -9,7 +9,11 @@ GuiRenderer: 桌面端渲染器。
 
 所有事件携带 session_id，前端据此做会话隔离，避免切换会话后
 旧会话的流式事件污染当前视图。
+
+工具结果成败判定复用 minihermes.core.output._detect_status。
 """
+
+from minihermes.core.output import _detect_status
 
 
 class GuiRenderer:
@@ -47,15 +51,3 @@ class GuiRenderer:
 
     def finalize(self):
         pass
-
-
-def _detect_status(result: str) -> str:
-    """根据工具结果首行粗略判断成功/失败，用于前端工具卡片着色。"""
-    if not result:
-        return "ok"
-    first = result.strip().split("\n", 1)[0].lower()
-    if first.startswith(("error", "failed", "exception", "denied", "permission", "traceback")):
-        return "error"
-    if first.startswith("skipped"):
-        return "warn"
-    return "ok"

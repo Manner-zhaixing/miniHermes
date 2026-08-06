@@ -4,6 +4,7 @@ from .config import (
     get_search_config,
     get_code_execution_config,
     get_evolution_config,
+    register_setup_wizard,
     MINIHERMES_HOME,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "get_search_config",
     "get_code_execution_config",
     "get_evolution_config",
+    "register_setup_wizard",
     "MINIHERMES_HOME",
 ]

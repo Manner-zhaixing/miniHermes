@@ -3,7 +3,7 @@
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import Condition
 
-from cli.state import AppState
+from minihermes.cli.state import AppState
 
 
 def build_keybindings(state: AppState, input_area) -> KeyBindings:
@@ -52,7 +52,7 @@ def build_keybindings(state: AppState, input_area) -> KeyBindings:
         """提交当前 approval 选项。"""
         if not state.approval_state:
             return
-        from cli.approval import _APPROVAL_KEYS
+        from minihermes.cli.approval import _APPROVAL_KEYS
         selected = state.approval_state.get("selected", 0)
         state.approval_state["response_queue"].put(_APPROVAL_KEYS[selected])
         state.clear_approval()
@@ -62,7 +62,7 @@ def build_keybindings(state: AppState, input_area) -> KeyBindings:
         """提交当前 plan 审批选项。"""
         if not state.plan_approval_state:
             return
-        from cli.plan import _PLAN_KEYS
+        from minihermes.cli.plan_ui import _PLAN_KEYS
         selected = state.plan_approval_state.get("selected", 0)
         state.plan_approval_state["response_queue"].put(_PLAN_KEYS[selected])
         state.clear_plan_approval()
@@ -125,7 +125,7 @@ def build_keybindings(state: AppState, input_area) -> KeyBindings:
     @kb.add('down', filter=Condition(lambda: bool(state.plan_approval_state)))
     def handle_plan_approval_down(event):
         if state.plan_approval_state:
-            from cli.plan import _PLAN_CHOICES
+            from minihermes.cli.plan_ui import _PLAN_CHOICES
             max_idx = len(_PLAN_CHOICES) - 1
             state.plan_approval_state["selected"] = min(max_idx, state.plan_approval_state.get("selected", 0) + 1)
             event.app.invalidate()
@@ -139,7 +139,7 @@ def build_keybindings(state: AppState, input_area) -> KeyBindings:
     @kb.add('down', filter=Condition(lambda: bool(state.approval_state)))
     def handle_approval_down(event):
         if state.approval_state:
-            from cli.approval import _APPROVAL_CHOICES
+            from minihermes.cli.approval import _APPROVAL_CHOICES
             max_idx = len(_APPROVAL_CHOICES) - 1
             state.approval_state["selected"] = min(max_idx, state.approval_state.get("selected", 0) + 1)
             event.app.invalidate()

@@ -22,7 +22,7 @@ class PythonBridge {
       const bundled = path.join(process.resourcesPath, 'backend', 'minihermes-backend');
       if (fs.existsSync(bundled)) return bundled;
     }
-    // 开发环境：minihermes 项目根 = minihermes-desktop 的父目录
+    // 开发环境：minihermes 项目根 = desktop 的父目录
     const kernelRoot = path.resolve(__dirname, '..', '..');
     const venvPython = path.join(kernelRoot, '.venv', 'bin', 'python');
     if (fs.existsSync(venvPython)) return venvPython;

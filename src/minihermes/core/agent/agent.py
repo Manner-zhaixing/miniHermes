@@ -14,16 +14,16 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-import tools as tool_registry
-from tools.memory import get_store as get_memory_store
-from provider import Provider, StreamResult
-from prompt import build_system_prompt
-from renderer import StreamRenderer, print_budget_warning
-from renderer.renderer import render_diff, _cprint, _DIM, _RST
-from session import SessionDB
-from context.compressor import ContextCompressor
-from context import ConversationContext
-import config as cfg
+from minihermes.core import tools as tool_registry
+from minihermes.core.tools.memory import get_store as get_memory_store
+from minihermes.core.provider import Provider, StreamResult
+from minihermes.core.prompt import build_system_prompt
+from minihermes.core.output import print_budget_warning, render_diff, _cprint, _DIM, _RST
+from minihermes.core.rendering import Renderer
+from minihermes.core.session import SessionDB
+from minihermes.core.context.compressor import ContextCompressor
+from minihermes.core.context import ConversationContext
+import minihermes.core.config as cfg
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Agent:
         # 上下文压缩器
         self._compressor = ContextCompressor(provider)
         # 安全审批引擎
-        from approval import ApprovalEngine
+        from minihermes.core.approval import ApprovalEngine
         self._approval = ApprovalEngine()
         # 对话状态容器（token 追踪、预算、压缩触发、进化计数器）
         tools_json = json.dumps(self._get_tool_schemas())
@@ -159,7 +159,7 @@ class Agent:
             工具返回的字符串结果。
         """
         if tool_name == "clarify":
-            from tools.clarify import clarify as clarify_tool
+            from minihermes.core.tools.clarify import clarify as clarify_tool
 
             return clarify_tool(
                 question=args.get("question", ""),
@@ -168,7 +168,7 @@ class Agent:
             )
 
         if tool_name == "delegate_task":
-            from agent.delegate import run_delegate, DelegationRequest
+            from minihermes.core.agent.delegate import run_delegate, DelegationRequest
 
             request = DelegationRequest(
                 task=args.get("task", ""),
@@ -315,7 +315,7 @@ class Agent:
         self,
         user_message: str,
         history: list[dict],
-        renderer: Optional[StreamRenderer] = None,
+        renderer: Optional[Renderer] = None,
         session_id: Optional[str] = None,
     ) -> ConversationResult:
         """

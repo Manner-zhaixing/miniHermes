@@ -4,7 +4,7 @@
 """
 
 import time
-from tools import register
+from minihermes.core.tools import register
 
 try:
     import psutil

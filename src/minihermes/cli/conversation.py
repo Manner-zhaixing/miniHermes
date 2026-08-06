@@ -2,50 +2,15 @@
 
 from pathlib import Path
 
-from agent.agent import Agent
-from cli.state import AppState
-from cli.commands import handle_slash_command
-from cli.plan import (
-    PLAN_ALLOWED_TOOLS, PLAN_MODE_PROMPT,
-    generate_plan_path, make_plan_approval_callback,
-)
-from cli.context_ref import preprocess as preprocess_refs
-from renderer.renderer import _cprint, _AMBER, _BOLD, _DIM, _GOLD, _RST
-from renderer import print_error, StreamRenderer
-from session import SessionDB
-import config as cfg
-
-
-EVO_MEMORY_NUDGE_INTERVAL = 10
-EVO_SKILL_NUDGE_INTERVAL = 10
-EVO_NUDGE_MIN_TURNS = 5
-
-
-def _try_nudge(agent, state: "AppState", user_turns: int):
-    """检查进化系统 nudge 触发条件，满足则后台运行 nudge agent。"""
-    evo_cfg = cfg.get_evolution_config()
-    if not evo_cfg.get("enabled", False):
-        return
-
-    if user_turns < EVO_NUDGE_MIN_TURNS:
-        return
-
-    nudge_type = None
-
-    # Memory nudge：按用户对话轮数
-    agent.turns_since_memory += 1
-    if EVO_MEMORY_NUDGE_INTERVAL > 0 and agent.turns_since_memory >= EVO_MEMORY_NUDGE_INTERVAL:
-        nudge_type = "memory"
-        agent.turns_since_memory = 0
-
-    # Skill nudge：按工具迭代次数（计数器在 agent 主循环中递增）
-    if EVO_SKILL_NUDGE_INTERVAL > 0 and agent.iters_since_skill >= EVO_SKILL_NUDGE_INTERVAL:
-        nudge_type = "both" if nudge_type == "memory" else "skill"
-        agent.iters_since_skill = 0
-
-    if nudge_type and state.conversation_history:
-        from evolution.nudge import spawn_nudge
-        spawn_nudge(agent.provider, state.conversation_history, nudge_type)
+from minihermes.cli.state import AppState
+from minihermes.cli.commands import handle_slash_command
+from minihermes.cli.plan_ui import make_plan_approval_callback
+from minihermes.core.services.plan import run_plan_flow, PLAN_MODE_PREFIX
+from minihermes.core.services.context_ref import preprocess as preprocess_refs
+from minihermes.core.services.nudge import maybe_trigger_nudge
+from minihermes.core.output import _cprint, _AMBER, _BOLD, _DIM, _GOLD, _RST, print_error
+from minihermes.cli.renderer import StreamRenderer
+from minihermes.core.session import SessionDB
 
 
 def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
@@ -59,7 +24,7 @@ def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
     if user_input.strip().lower().startswith("/setup"):
         state.status_text = f" ⚕ {model_name[:26]} │ configuring..."
         state.invalidate()
-        from config.setup_wizard import run_setup_cli
+        from minihermes.cli.setup_wizard import run_setup_cli
         try:
             run_setup_cli(app_loop=state._main_loop)
         except Exception as e:
@@ -89,25 +54,26 @@ def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
 
 def _execute_plan_mode(agent, state, db, renderer, model_name: str,
                         user_input: str, plan_description: str):
-    """执行 Plan Mode（只读规划 + 审批执行）。返回 (user_input, should_skip)。"""
+    """执行 Plan Mode（只读规划 + 审批执行）。返回 (user_input, should_skip)。
+
+    核心流程统一在 core/services/plan.run_plan_flow；这里只提供终端侧
+    状态栏与审批回调（TUI 面板）。
+    """
     state.command_running = True
     state.status_text = f" ⚕ {model_name[:26]} │ [PLAN] analyzing..."
     state.invalidate()
 
-    plan_agent = Agent(
-        provider=agent.provider,
-        db=db,
-        clarify_callback=agent.clarify_callback,
-        auto_approve=True,
-        tool_filter={"include": PLAN_ALLOWED_TOOLS},
-        system_prompt_override=agent.system_prompt + PLAN_MODE_PROMPT,
-        max_iterations_override=50,
-    )
-
     try:
-        plan_result = plan_agent.run_conversation(
-            user_message=user_input, history=[],
-            renderer=renderer, session_id=state.session_id,
+        exec_message = run_plan_flow(
+            provider=agent.provider,
+            db=db,
+            renderer=renderer,
+            session_id=state.session_id,
+            plan_description=plan_description,
+            base_system_prompt=agent.system_prompt,
+            clarify_callback=agent.clarify_callback,
+            approval=make_plan_approval_callback(state),
+            on_plan_saved=lambda p: _cprint(f"\n{_DIM}Plan saved: {p}{_RST}"),
         )
     except KeyboardInterrupt:
         _cprint(f"\n{_GOLD}⚡ Plan interrupted{_RST}")
@@ -123,32 +89,15 @@ def _execute_plan_mode(agent, state, db, renderer, model_name: str,
         state.invalidate()
         return user_input, True
 
-    # 保存方案到文件
-    plan_text = plan_result.final_response
-    plan_path = generate_plan_path(plan_description)
-    plan_path.write_text(plan_text, encoding="utf-8")
-    _cprint(f"\n{_DIM}Plan saved: {plan_path}{_RST}")
-
-    # Phase 2: 审批
-    state.status_text = f" ⚕ {model_name[:26]} │ [PLAN] awaiting approval..."
-    state.invalidate()
-
-    plan_approval_cb = make_plan_approval_callback(state)
-    choice = plan_approval_cb(plan_text, str(plan_path))
-
-    if choice == "execute":
-        _cprint(f"\n{_GOLD}▶ Executing plan...{_RST}\n")
-        return (
-            f"Execute the following approved implementation plan. "
-            f"Implement each step in order using the appropriate tools.\n\n"
-            f"---\n{plan_text}\n---"
-        ), False
-    else:
+    if exec_message is None:
         _cprint(f"\n{_DIM}Plan cancelled.{_RST}")
         state.command_running = False
         state.status_text = f" ⚕ {model_name[:26]}"
         state.invalidate()
         return user_input, True
+
+    _cprint(f"\n{_GOLD}▶ Executing plan...{_RST}\n")
+    return exec_message, False
 
 
 def _post_process(agent, state, db, result, is_init_run: bool,
@@ -184,7 +133,7 @@ def _post_process(agent, state, db, result, is_init_run: bool,
         db.set_title(state.session_id, user_input[:10].rstrip())
 
     # 进化系统：Nudge 触发
-    _try_nudge(agent, state, user_turns)
+    maybe_trigger_nudge(agent, state.conversation_history, user_turns)
 
     # 每 20 轮提示
     if user_turns > 0 and user_turns % 20 == 0:
@@ -219,26 +168,25 @@ def conversation_loop(
                 continue
 
         # ── Plan mode 检测与消息转换 ───────────────────────────────
-        is_plan_mode = user_input.startswith("__PLAN_MODE__:")
+        is_plan_mode = user_input.startswith(PLAN_MODE_PREFIX)
         plan_description = ""
         if is_plan_mode:
-            plan_description = user_input[len("__PLAN_MODE__:"):]
-            user_input = (
-                f"Create a detailed implementation plan for:\n\n"
-                f"{plan_description}\n\n"
-                f"Analyze the codebase thoroughly using read-only tools before producing the plan."
-            ) if plan_description else (
-                "The user wants you to create an implementation plan. "
-                "Ask them what they'd like to plan using the clarify tool, "
-                "then analyze the codebase and produce a detailed plan."
-            )
+            plan_description = user_input[len(PLAN_MODE_PREFIX):]
 
         # ── @file 引用预处理 ──────────────────────────────────────
         if "@file:" in user_input:
-            ref_result = preprocess_refs(user_input, cwd=Path.cwd())
-            for w in ref_result.warnings:
-                _cprint(f"{_AMBER}⚠ {w}{_RST}")
-            user_input = ref_result.message
+            if is_plan_mode:
+                # Plan 描述内的 @file 引用：展开后作为 plan_description 传给 run_plan_flow
+                # （与桌面端 server.py 先展开再取描述保持一致）
+                ref_result = preprocess_refs(plan_description, cwd=Path.cwd())
+                for w in ref_result.warnings:
+                    _cprint(f"{_AMBER}⚠ {w}{_RST}")
+                plan_description = ref_result.message
+            else:
+                ref_result = preprocess_refs(user_input, cwd=Path.cwd())
+                for w in ref_result.warnings:
+                    _cprint(f"{_AMBER}⚠ {w}{_RST}")
+                user_input = ref_result.message
 
         # 用户消息回显
         if is_plan_mode:
@@ -292,7 +240,7 @@ def conversation_loop(
 
     # 退出前尝试运行 curator
     try:
-        from evolution.curator import maybe_run_curator
+        from minihermes.core.evolution.curator import maybe_run_curator
         maybe_run_curator(provider=agent.provider)
     except Exception:
         pass

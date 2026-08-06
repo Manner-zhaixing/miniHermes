@@ -3,7 +3,7 @@
 """
 
 from pathlib import Path
-from tools import register
+from minihermes.core.tools import register
 
 
 # ── read_file ────────────────────────────────────────────────────────────────

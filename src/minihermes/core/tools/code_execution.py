@@ -8,8 +8,8 @@ import time
 from contextlib import contextmanager
 from typing import Any
 
-import config as cfg
-from tools import register
+import minihermes.core.config as cfg
+from minihermes.core.tools import register
 
 try:
     from dotenv import load_dotenv

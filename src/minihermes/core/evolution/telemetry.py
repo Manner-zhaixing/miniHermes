@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from skills import USER_SKILLS_DIR
+from minihermes.core.skills import USER_SKILLS_DIR
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 

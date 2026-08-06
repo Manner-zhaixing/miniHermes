@@ -29,57 +29,73 @@ No automated test suite currently exists in the project.
 ## Directory Structure
 
 ```
-main.py                       # Entry point
-agent/        agent.py        # Conversation loop orchestrator
-              delegate.py     # Sub-agent delegation
-approval/     engine.py       # Security approval engine
-provider/     provider.py     # OpenAI SDK wrapper (streaming, retry, reasoning)
-context/      context.py      # ConversationContext (tokens, budget)
-              compressor.py   # 5-phase context compression
-              token_utils.py  # Shared token estimation
-prompt/       builder.py      # 12-layer system prompt assembly
-config/       config.py       # Config class + legacy accessor functions
-              setup_wizard.py # Interactive setup wizard
-              config.yaml     # Default config template
-tools/        registry.py     # ToolRegistry (registration, schema query, execution)
-              __init__.py     # Public API + eager imports for @register side effects
-              retry.py        # Tool execution retry with backoff
-              approval.py     # Approval pattern data (HARDLINE, DANGEROUS, SENSITIVE)
-              bash.py         # Shell command execution
-              files.py        # File read/write/list
-              search.py       # Exa AI web search
-              code_execution.py  # Cloud sandbox code execution
-              memory.py       # Cross-session persistent memory
-              delegate.py     # Delegate task schema (execution in agent/delegate.py)
-              todo.py         # Task planning
-              clarify.py      # User clarification
-              image_gen.py    # Image generation via Pollinations.ai
-              process_tool.py # System process listing
-              session_search.py  # FTS5 session search
-              skills_tool.py  # Skill loading
-              skill_manage.py # Skill lifecycle management
-              web_extract.py  # Web page content extraction
-session/      db.py           # SQLite WAL persistence
-skills/       manager.py      # Skill discovery, YAML frontmatter parsing, index building
-              preprocessing.py  # Template var substitution, inline shell expansion
-              guard.py          # Security scanner for agent-created skills
-              __init__.py       # Public API exports
-cli/          conversation.py # Background conversation loop thread
-              state.py        # AppState (shared mutable state between threads)
-              commands.py     # Slash command handlers
-              plan.py         # Plan mode
-              context_ref.py  # @file reference preprocessor
-              layout.py       # prompt_toolkit layout builder
-              keybindings.py  # Keyboard shortcuts
-              styles.py       # UI color styles
-              completers.py   # Tab completion
-              approval.py     # Approval UI rendering
-              clarify.py      # Clarify UI rendering
-renderer/     renderer.py     # StreamRenderer, SubagentRenderer, Rich adapters
-evolution/    nudge.py        # Background memory/skill review triggers
-              curator.py      # Skill lifecycle management
-              telemetry.py    # Usage telemetry
-_builtin_skills/              # Built-in skill templates
+main.py                       # 根入口 shim → minihermes.main（python main.py 可用）
+src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包此目录）
+  __init__.py  __main__.py    # python -m minihermes
+  main.py                     # CLI 入口（console script: minihermes = minihermes.main:main）
+  core/                       # ★ 共享核心（前端无关；禁止 import cli/prompt_toolkit/rich）
+    agent/        agent.py    # Conversation loop orchestrator
+                  delegate.py # Sub-agent delegation
+    approval/     engine.py   # Security approval engine
+    provider/     provider.py # OpenAI SDK wrapper (streaming, retry, reasoning)
+    context/      context.py  # ConversationContext (tokens, budget)
+                  compressor.py  # 5-phase context compression
+                  token_utils.py # Shared token estimation
+    prompt/       builder.py  # 12-layer system prompt assembly
+    config/       config.py   # Config class + legacy accessor functions + register_setup_wizard
+                  config.yaml # Default config template（包数据）
+    tools/        registry.py # ToolRegistry (registration, schema query, execution)
+                  __init__.py # Public API + eager imports for @register side effects
+                  retry.py    # Tool execution retry with backoff
+                  approval.py # Approval pattern data (HARDLINE, DANGEROUS, SENSITIVE)
+                  bash.py     # Shell command execution
+                  files.py    # File read/write/list
+                  search.py   # Exa AI web search
+                  code_execution.py  # Cloud sandbox code execution
+                  memory.py   # Cross-session persistent memory
+                  delegate.py # Delegate task schema (execution in core/agent/delegate.py)
+                  todo.py     # Task planning
+                  clarify.py  # User clarification
+                  image_gen.py # Image generation via Pollinations.ai
+                  process_tool.py  # System process listing
+                  session_search.py  # FTS5 session search
+                  skills_tool.py    # Skill loading
+                  skill_manage.py   # Skill lifecycle management
+                  web_extract.py    # Web page content extraction
+    session/      db.py       # SQLite WAL persistence（含 get_token_stats）
+    skills/       manager.py  # Skill discovery, YAML frontmatter parsing, index building
+                  preprocessing.py  # Template var substitution, inline shell expansion
+                  guard.py          # Security scanner for agent-created skills
+                  __init__.py       # Public API exports
+    evolution/    nudge.py    # Background memory/skill review triggers
+                  curator.py  # Skill lifecycle management
+                  telemetry.py # Usage telemetry
+    output.py                 # ANSI 旁路输出（纯 print，无 prompt_toolkit/rich）
+    rendering.py              # Renderer Protocol + NullRenderer（核心↔前端事件缝）
+    services/                 # ★ 共享编排（CLI 与桌面复用）
+      plan.py                 # Plan 常量 + run_plan_flow（统一两端三阶段流程）
+      context_ref.py          # @file reference preprocessor
+      session_service.py      # session_id / token 统计 / session_to_ui
+      commands.py             # 斜杠命令注册表（CLI + 桌面单一事实源）
+      nudge.py                # maybe_trigger_nudge（进化触发）
+    _builtin_skills/          # Built-in skill templates（包数据）
+  cli/                        # ★ 终端前端（prompt_toolkit + rich）
+    conversation.py           # Background conversation loop thread
+    state.py                  # AppState (shared mutable state between threads)
+    commands.py               # Slash command handlers（消费 core/services）
+    plan_ui.py                # Plan 审批面板（UI 半部）
+    renderer.py               # StreamRenderer / SubagentRenderer（终端渲染实现）
+    setup_wizard.py           # 首次运行向导 + /setup（CLI 专用，经 config 钩子注册）
+    layout.py                 # prompt_toolkit layout builder
+    keybindings.py            # Keyboard shortcuts
+    styles.py                 # UI color styles
+    completers.py             # Tab completion
+    approval.py               # Approval UI rendering
+    clarify.py                # Clarify UI rendering
+desktop/                      # ★ 桌面前端（Electron + React + FastAPI 子进程）
+  backend/server.py           # FastAPI 后端，仅 import minihermes.core.*
+  backend/gui_renderer.py     # GuiRenderer（实现 core.rendering.Renderer）
+  electron/ src/ scripts/ resources/ package.json
 ```
 
 ## Message Flow
@@ -364,7 +380,8 @@ All old APIs preserved: `discover_skills()` returns same shape, `load_skill()` r
 - Tool execution retry is always enabled for `bash`, `web_extract`, `web_search` — up to 2 retries on timeout/transient errors. Bash timeout doubles on each retry (max 120s).
 - All tool outputs go through `truncate_output()` (50K char limit, head 40% + tail 60%).
 - Config merging: user config at `~/.minihermes/config.yaml` is merged over the default template at `config/config.yaml`. A `Config` class provides injectable access with lazy loading. Missing top-level keys are auto-filled on load.
-- The build script (`build_wheel.sh`) copies source modules into `minihermes_cli/app/` before packaging. Only `minihermes_cli/` is included in the wheel. The package list in `build_wheel.sh` must stay in sync with the project structure.
+- Single distribution `minihermes`: hatchling packages `src/minihermes` (`pyproject.toml` `packages = ["src/minihermes"]`), console script `minihermes = minihermes.main:main`. `config.yaml` 与 `_builtin_skills/` 作为包数据随 wheel 发布。`build_wheel.sh` 只是 `uv build` 的封装。
+- 布局与边界：共享核心在 `minihermes.core`（前端无关，禁止 import `cli`/`prompt_toolkit`/`rich`）；终端前端在 `minihermes.cli`；桌面后端 `desktop/backend/server.py` 仅 import `minihermes.core.*`。核心↔前端通过 `core/rendering.py` 的 `Renderer` Protocol 解耦。
 - The CLI runs two threads: main thread (prompt_toolkit UI event loop) and daemon thread (conversation loop consuming from `AppState.input_queue`). `AppState` (`cli/state.py`) is the shared mutable state.
 - Primary language in commits and comments is Chinese.
 
