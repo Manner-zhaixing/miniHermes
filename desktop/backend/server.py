@@ -410,6 +410,13 @@ kernel: Kernel | None = None
 def get_kernel() -> Kernel:
     global kernel
     if kernel is None:
+        # 启动时恢复上次保存的工作目录（general.cwd）
+        try:
+            _saved_cwd = cfg.load().get("general", {}).get("cwd")
+            if _saved_cwd and os.path.isdir(_saved_cwd):
+                os.chdir(_saved_cwd)
+        except Exception:
+            pass
         kernel = Kernel(ws_send=manager.send)
         # 启动时同步内置技能（幂等）
         try:
@@ -646,14 +653,32 @@ class CwdBody(BaseModel):
 @app.post("/api/cwd")
 def api_set_cwd(body: CwdBody):
     """切换内核工作目录：os.chdir 全局生效（工具/上下文文件/相对路径都跟随），
-    同时持久化到 config.yaml 的 general.cwd，下次启动恢复。"""
+    同时持久化到 config.yaml 的 general.cwd，下次启动恢复。
+
+    安全约束：当前活跃会话已有消息时拒绝切换，避免历史上下文与新目录不一致。
+    切换后重建系统提示词（上下文文件 / 环境块跟随新 cwd）。
+    """
     target = str(Path(body.path).expanduser().resolve())
     if not os.path.isdir(target):
         return {"ok": False, "error": f"目录不存在: {target}"}
+
+    # 防御性校验：当前会话已有消息则拒绝（前端也做了同样检查）
+    k = get_kernel()
+    if k.current_sid:
+        msgs = k.db.get_messages_for_llm(k.current_sid)
+        if msgs:
+            return {"ok": False, "error": "当前会话已有消息，请新建会话后再切换工作目录"}
+
     try:
         os.chdir(target)
     except OSError as e:
         return {"ok": False, "error": f"切换失败: {e}"}
+
+    # 重建系统提示词，使上下文文件 / 环境块立即跟随新 cwd
+    try:
+        k.agent.reload_system_prompt(cwd=target)
+    except Exception:
+        pass  # 重建失败不影响 chdir 本身
 
     # 持久化到 config.yaml general.cwd（浅合并，保留其他字段）
     try:

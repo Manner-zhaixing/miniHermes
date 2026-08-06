@@ -24,8 +24,14 @@ mac:
   target:
     - dmg
     - zip
-  # 无开发者证书时使用 ad-hoc 签名（identity: null 允许）
-  identity: null
+  # 无开发者证书时使用 ad-hoc 签名
+  # 注意：identity: null = 完全不签名（启动即崩 task_name_for_pid failure 5）
+  # 正确做法是 identity: "-"（真正的 ad-hoc）+ 关闭 hardened runtime（避免 Team ID 校验冲突）
+  identity: "-"
+  hardenedRuntime: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 dmg:
@@ -44,3 +50,7 @@ publish:
   repo: miniHermes
 
 npmRebuild: false
+
+# electron zip 下载走国内镜像（GitHub releases 直连超时）
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/

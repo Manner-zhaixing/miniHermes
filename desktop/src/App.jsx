@@ -359,6 +359,12 @@ export default function App() {
 
   /** 选择并切换工作目录：系统目录选择器 → 后端 chdir → 更新状态 */
   const changeCwd = useCallback(async () => {
+    // 当前会话已有消息时禁止切换，避免历史上下文与新目录不一致
+    if (messagesRef.current.length > 0) {
+      setToast('当前会话已有消息，请新建会话后再切换工作目录');
+      setTimeout(() => setToast(null), 4000);
+      return;
+    }
     try {
       // Electron 环境：系统目录选择器；浏览器调试环境兜底用默认目录
       let chosen = null;
