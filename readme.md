@@ -1,13 +1,11 @@
 <p align="center">
-  <img src="asset/1.png" alt="MiniHermes" width="480" />
+  <img src="asset/1.png" alt="MiniHermes" width="420" />
 </p>
 
 <h1 align="center">MiniHermes</h1>
 
 <p align="center">
   <b>轻量级 AI 编程助手</b> · 纯 Python · 终端 + 桌面双端
-  <br/>
-  多模型自由切换 · 工具调用 · 跨会话记忆 · 长对话不失控
 </p>
 
 <p align="center">
@@ -19,31 +17,26 @@
 
 ---
 
-## 特性
+## 简介
 
-- **双端形态** — 终端 CLI（富交互界面）+ 桌面端（Electron），共享同一内核
-- **多模型自由切换** — 内置 DeepSeek / 智谱 GLM，运行时秒切厂商与模型，支持任意 OpenAI 兼容 API
-- **17 个内置工具** — 文件读写、命令执行、网页搜索、代码沙箱、图片生成、子任务委派…
-- **跨会话记忆** — 自动记住你的偏好与项目约定
-- **长对话不失控** — 五阶段上下文压缩，1M 上下文窗口也能流畅对话
-- **安全有保障** — 危险命令自动拦截，敏感操作弹窗确认
-- **Plan 规划模式** — 先出方案、你确认后执行
-- **技能系统** — 内置技能 + 一键扩展自定义技能
-
----
+MiniHermes 是一个轻量级的 AI 编程助手：在终端或桌面应用里，用自然语言完成编码、调试、搜索等任务。内置多模型自由切换、工具调用、跨会话记忆与安全审批，开箱即用。
 
 ## 架构
 
-```mermaid
-flowchart TB
-    CLI["终端 CLI"] --> CORE["MiniHermes 内核"]
-    DESK["桌面端"] --> CORE
-    CORE --> LLM["DeepSeek / GLM 等<br/>OpenAI 兼容 API"]
-```
+<img src="docs/architecture.svg" alt="MiniHermes 架构图" width="100%" />
 
-内核统一承载：Agent 对话引擎 · 工具系统 · 记忆 · 上下文压缩 · 安全审批 · 技能系统 · 会话持久化。
+一个共享内核，同时驱动终端与桌面两种前端；模型层可插拔，支持 DeepSeek、智谱 GLM 及任意 OpenAI 兼容 API。
 
----
+## 特性
+
+- **双端形态** — 终端 CLI 与桌面端共享同一内核
+- **多模型切换** — 运行时秒切厂商与模型，任意 OpenAI 兼容 API 一行接入
+- **17 个内置工具** — 文件读写、命令执行、网页搜索、代码沙箱、图片生成等
+- **跨会话记忆** — 自动记住偏好与项目约定
+- **长对话不失控** — 五阶段上下文压缩，1M 上下文窗口流畅对话
+- **安全有保障** — 危险命令自动拦截，敏感操作弹窗确认
+- **Plan 规划模式** — 先出方案、确认后执行
+- **技能系统** — 内置技能，一键扩展自定义
 
 ## 快速开始
 
@@ -61,17 +54,14 @@ python main.py
 minihermes
 ```
 
-首次启动自动进入配置向导：选择厂商 → 填入 API Key → 选择模型。
-
-> 桌面端体验：`cd desktop && npm install && npm run dev`，详见 [desktop/README.md](desktop/README.md)
-
----
+首次启动进入配置向导：选择厂商 → 填入 API Key → 选择模型。
 
 ## 基本操作
 
 | 操作 | 方式 |
 |------|------|
-| 发送消息 / 多行输入 | `Enter` / `Ctrl+J` |
+| 发送消息 | `Enter` |
+| 多行输入 | `Ctrl+J` |
 | 中断回复 | `Ctrl+C` |
 | 退出 | `/exit` 或 `Ctrl+D` |
 | 规划模式 | `/plan <描述>` |
@@ -79,30 +69,9 @@ minihermes
 | 加载技能 | `/code-review` |
 | 引用文件 | `@file:path/to/file.py:30-50` |
 
----
-
-## 配置
-
-所有配置集中在 `~/.minihermes/config.yaml`，只需填 API Key，其余用默认值即可：
-
-```yaml
-provider:
-  active: "deepseek"
-  list:
-    deepseek:
-      api_key: "sk-..."       # 或环境变量 DEEPSEEK_API_KEY
-    glm:
-      api_key: ""
-agent:
-  max_iterations: 100
-  show_thinking: true
-```
-
-> 旧版 `model:` 配置首次启动自动迁移；新增厂商只需加一条配置项。
-
----
-
 ## 文档
+
+详细架构与模块文档见 [`docs/`](docs/)：
 
 | 文档 | 内容 |
 |------|------|
@@ -117,8 +86,6 @@ agent:
 | [CLI 界面](docs/08-cli.md) | 终端 UI |
 | [会话持久化](docs/09-session.md) | SQLite + FTS5 |
 
----
-
 ## 演示
 
 ![demo-1](asset/1.png)
@@ -128,8 +95,6 @@ agent:
 ![demo-3](asset/3.png)
 
 ![demo-4](asset/4.png)
-
----
 
 ## License
 
