@@ -25,7 +25,7 @@ MiniHermes 是一个轻量级的 AI 编程助手：在终端或桌面应用里�
 
 <img src="docs/architecture.svg" alt="MiniHermes 架构图" width="100%" />
 
-一个共享内核，同时驱动终端与桌面两种前端；模型层可插拔，支持 DeepSeek、智谱 GLM 及任意 OpenAI 兼容 API。
+一个共享内核，同时驱动终端与桌面两种前端；模型层可插拔，支持 DeepSeek 及任意 OpenAI 兼容 API。
 
 ## 特性
 
