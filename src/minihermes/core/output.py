@@ -1,7 +1,7 @@
 """
 共享输出层：核心的 ANSI 侧信道输出（与前端渲染器解耦）。
 
-核心（agent/provider/tools/evolution）需要向用户展示的进度、错误、diff
+核心（agent/provider/tools）需要向用户展示的进度、错误、diff
 等"旁路输出"统一走这里。实现为纯 print()，不含 prompt_toolkit / rich；
 终端富渲染（欢迎页、历史回显、流式面板）在 minihermes.cli.renderer 中。
 """

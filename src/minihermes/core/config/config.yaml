@@ -1,10 +1,22 @@
-model:
-  name: "deepseek-v4-pro"
-  base_url: ""
-  api_key: ""
-  max_iterations: 100
-  show_thinking: true
-  reason: true
+# 多厂商 LLM 配置：预设厂商在代码注册表（core/provider/registry.py）
+# 这里只存用户覆盖项。空值 = 用预设默认。
+provider:
+  active: "deepseek"    # 当前激活厂商 id（deepseek / glm …）
+  list:
+    deepseek:
+      api_key: ""           # 只填这一个即可用
+      base_url: ""          # 空 → https://api.deepseek.com
+      model: ""             # 空 → deepseek-v4-flash
+      context_window: 0     # 0 → 预设默认（128000）
+      thinking_effort: ""   # 空 → 预设默认；可选 off|medium|high|max
+    glm:
+      api_key: ""           # 智谱 GLM
+      base_url: ""          # 空 → https://open.bigmodel.cn/api/paas/v4
+      model: ""             # 空 → glm-5
+      context_window: 0
+      thinking_effort: ""
+
+# agent.max_iterations / agent.show_thinking 已写死进代码（core/agent/agent.py），不再配置
 
 search:
   # Exa AI 搜索 API — 专为 AI Agent 设计的搜索引擎
@@ -15,8 +27,3 @@ search:
 code_execution:
   # 七牛云 E2B 兼容沙箱 API Key
   api_key: ""
-
-evolution:
-  # 自动进化系统总开关（记忆复盘 / 技能复盘 / Curator 维护）
-  enabled: true
-

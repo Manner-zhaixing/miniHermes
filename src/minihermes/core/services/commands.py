@@ -55,6 +55,10 @@ _COMMAND_DEFS = [
      "cli_desc": "Resume a previous session", "desktop_desc": None},
     {"cmd": "/setup", "has_arg": False, "cli": True, "desktop": False, "desktop_action": None,
      "cli_desc": "Interactive configuration setup", "desktop_desc": None},
+    {"cmd": "/provider", "has_arg": True, "cli": True, "desktop": False, "desktop_action": None,
+     "cli_desc": "List/switch service provider (immediate)", "desktop_desc": None},
+    {"cmd": "/model", "has_arg": True, "cli": True, "desktop": False, "desktop_action": None,
+     "cli_desc": "List/switch model for current provider (immediate)", "desktop_desc": None},
     {"cmd": "/quit", "has_arg": False, "cli": True, "desktop": False, "desktop_action": None,
      "cli_desc": "Exit MiniHermes", "desktop_desc": None},
 ]

@@ -13,6 +13,24 @@ import FilesPanel from './components/FilesPanel.jsx';
 let _uid = 0;
 const uid = () => `m${Date.now()}_${_uid++}`;
 
+/** 从 GET /api/providers 响应推导当前激活厂商的展示信息（resolved 值）。 */
+function deriveProviderInfo(res) {
+  if (!res) return null;
+  const { active, providers } = res;
+  if (!active) return null;
+  const p = (providers || []).find((x) => x.name === active) || {};
+  return {
+    name: active,
+    title: p.title || active,
+    model: p.model || '',
+    models: p.models || [], // [{id, context_window}] 预设候选
+    context_window: p.context_window || 0,
+    thinking_effort: p.thinking_effort || 'max',
+    thinking_effort_levels: (p.thinking_effort_levels || ['off', 'medium', 'high', 'max']),
+    has_key: !!p.has_key,
+  };
+}
+
 export default function App() {
   const [view, setView] = useState('chat');
   const [connected, setConnected] = useState(false);
@@ -23,7 +41,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [approval, setApproval] = useState(null);
   const [clarify, setClarify] = useState(null);
-  const [modelName, setModelName] = useState('');
+  const [providerInfo, setProviderInfo] = useState(null);
   const [cwd, setCwd] = useState('');
   const [sessionFiles, setSessionFiles] = useState({}); // sid -> [{path, tool}]
   const [filesPanelOpen, setFilesPanelOpen] = useState(true);
@@ -242,15 +260,16 @@ export default function App() {
         client.on('plan_approval_request', (d) => setPlanApproval(d));
 
         // 初始加载会话列表、配置与命令
-        const [sessRes, cfgRes, cmdRes, cwdRes] = await Promise.all([
+        const [sessRes, cfgRes, provRes, cmdRes, cwdRes] = await Promise.all([
           client.loadSessions(),
           client.getConfig().catch(() => null),
+          client.getProviders().catch(() => null),
           client.getCommands().catch(() => ({ commands: [] })),
           client.getCwd().catch(() => null),
         ]);
         if (disposed) return;
         setSessions(sessRes.sessions || []);
-        setModelName(cfgRes?.model?.name || '');
+        setProviderInfo(deriveProviderInfo(provRes));
         // 优先用后端实时 cwd（config 可能未写入 general.cwd）
         setCwd(cwdRes?.cwd || cfgRes?.general?.cwd || '');
         const cmds = cmdRes.commands || [];
@@ -272,8 +291,34 @@ export default function App() {
     return () => { disposed = true; };
   }, []);
 
+  // 设置页保存配置后刷新头部厂商/模型信息（厂商/模型切换立即反映）
+  const refreshProviderInfo = useCallback(async () => {
+    try {
+      const res = await clientRef.current.getProviders();
+      setProviderInfo(deriveProviderInfo(res));
+    } catch {
+      // 忽略刷新失败（下次启动自然更新）
+    }
+  }, []);
+
+  // 对话窗口切换模型：全局生效（等价 CLI /model），切换成功后刷新徽章
+  const changeModel = useCallback(async (model) => {
+    if (!providerInfo || streamingRef.current) return;
+    try {
+      const res = await clientRef.current.setActiveModel({ provider: providerInfo.name, model });
+      if (!res.ok) {
+        setError(res.error || '切换模型失败');
+        return;
+      }
+      if (res.rebuild_warning) setError(res.rebuild_warning);
+      await refreshProviderInfo();
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [providerInfo, refreshProviderInfo]);
+
   // ── 动作 ─────────────────────────────────────────────────
-  const sendMessage = useCallback(async (text) => {
+  const sendMessage = useCallback(async (text, options = {}) => {
     const content = text.trim();
     if (!content || streamingRef.current) return;
     setError(null);
@@ -286,7 +331,10 @@ export default function App() {
         client.setTitle(sid, title);
       }
       pushMessage({ id: uid(), role: 'user', content, ts: Date.now() });
-      client.send({ type: 'send_message', session_id: sid, content });
+      const payload = { type: 'send_message', session_id: sid, content };
+      // 每轮思考强度覆盖（undefined 不序列化 → 服务端走厂商默认）
+      if (options.thinking_effort) payload.thinking_effort = options.thinking_effort;
+      client.send(payload);
     } catch (e) {
       setError(e.message);
     }
@@ -424,7 +472,7 @@ export default function App() {
         sessions={sessions}
         activeSid={activeSid}
         view={view}
-        modelName={modelName}
+        providerInfo={providerInfo}
         connected={connected}
         onNewSession={newSession}
         onResume={resumeSession}
@@ -446,7 +494,7 @@ export default function App() {
               activeSid={activeSid}
               cwd={cwd}
               onChangeCwd={changeCwd}
-              modelName={modelName}
+              providerInfo={providerInfo}
               tokens={(sessions.find((s) => s.id === activeSid) || {}).tokens || { input: 0, output: 0, reasoning: 0 }}
               fileCount={(sessionFiles[activeSid] || []).length}
               filesPanelOpen={filesPanelOpen}
@@ -459,6 +507,7 @@ export default function App() {
               onTitleEdited={onTitleEdited}
               mode={mode}
               onModeChange={setMode}
+              onModelChange={changeModel}
             />
             {filesPanelOpen && (
               <FilesPanel
@@ -468,7 +517,9 @@ export default function App() {
             )}
           </div>
         )}
-        {view === 'settings' && <SettingsView clientRef={clientRef} setError={setError} />}
+        {view === 'settings' && (
+          <SettingsView clientRef={clientRef} setError={setError} onConfigSaved={refreshProviderInfo} />
+        )}
         {view === 'skills' && <SkillsView clientRef={clientRef} setError={setError} />}
       </main>
 

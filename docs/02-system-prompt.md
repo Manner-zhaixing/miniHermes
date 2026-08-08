@@ -27,7 +27,7 @@ Request 2: [Static Part 10K tokens] + [Dynamic Part 3K tokens]
 **分层组装与缓存的关系**：
 - Layer 1-9（身份、记忆、工具引导、环境等）在一次 session 内固定不变
 - 放在 system prompt 前端 → 每次请求前缀完全匹配 → 缓存命中
-- Layer 10-12（时间戳、CLI 提示）可能变化 → 放在末尾
+- Layer 10-12（模型标识、环境、CLI 提示）可能变化 → 放在末尾
 
 ### MiniHermes 的分层设计哲学
 
@@ -39,7 +39,7 @@ Request 2: [Static Part 10K tokens] + [Dynamic Part 3K tokens]
 │  Layer 8:  技能索引                      │
 │  Layer 9:  上下文文件                    │
 ├──────────────────────────────────────────┤
-│  Layer 10: 时间戳                        │  ← 缓存失效区
+│  Layer 10: 模型标识                      │  ← 缓存失效区
 │  Layer 11: 环境提示                      │     (可能变化)
 │  Layer 12: 平台提示                      │
 └──────────────────────────────────────────┘
@@ -132,19 +132,21 @@ skills_index = build_skills_index()  # 扫描全局+项目技能目录
 
 每行一个技能：`- skill-name: one-line description`。Agent 调用 `skill_view` 时再加载完整内容。
 
-### Layer 10: 时间戳
+### Layer 10: 模型标识
 
 ```python
-timestamp_block = f"# currentDate\nToday's date is {datetime.now():%Y-%m-%d}."
+model_block = f"Model: {model_name}"
 ```
+
+> 时间戳已移除：不再向模型注入会话开始时间或当前日期（避免模型锚定陈旧时间）。
 
 ### Layer 10.5: 环境事实块
 
 ```python
 env_block = build_env_block(cwd)
 # → <env>
-#     cwd: /path/to/project
-#     platform: darwin
+#     Working directory: /path/to/project
+#     Platform: darwin
 #     OS Version: Darwin 24.x
 #   </env>
 ```
@@ -173,7 +175,7 @@ platform_hint = CLI_PLATFORM_HINT  # 固定字符串
 [Layer 7: 记忆快照]
 [Layer 9: 项目上下文]
 [Skills 索引]
-[Layer 10: 时间戳]
+[Layer 10: 模型标识]
 [Layer 10.5: 环境事实]
 [Layer 11: 环境提示]
 [Layer 12: CLI 平台提示]
@@ -311,7 +313,8 @@ def build_system_prompt(model_name, memory_store, cwd, tool_names):
         parts.append(skills)
 
     # Layers 10-12
-    parts.append(f"# currentDate\nToday's date is {datetime.now():%Y-%m-%d}.")
+    if model_name:
+        parts.append(f"Model: {model_name}")
     parts.append(build_env_block(cwd))
     parts.append(build_env_hint())
     parts.append(CLI_PLATFORM_HINT)

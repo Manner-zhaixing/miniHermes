@@ -21,7 +21,7 @@
 │  ├── input_queue.get() 阻塞等待    │
 │  ├── 斜杠命令处理                  │
 │  ├── Agent.run_conversation()      │
-│  ├── 后处理 + nudge                │
+│  ├── 后处理（状态/session 更新）    │
 │  └── state 状态更新                │
 └────────────────────────────────────┘
 ```
@@ -82,9 +82,6 @@ conversation_loop(state):
     # 5. 后处理
     state.conversation_history = result.messages
     state.session_id = result.session_id  # 压缩后可能变化
-
-    # 6. Nudge
-    _try_nudge(state, ...)
 ```
 
 ---

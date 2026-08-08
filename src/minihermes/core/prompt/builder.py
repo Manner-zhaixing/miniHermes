@@ -6,7 +6,7 @@
   Layer 7:  记忆层      — MemoryStore 冻结快照注入（session 内不变）
   Layer 9:  上下文文件  — .hermes.md / AGENTS.md / CLAUDE.md / .cursorrules
                           优先级递减，第一个匹配生效，含注入检测 + 截断
-  Layer 10: 时间戳      — 对话开始时间 + 模型名
+  Layer 10: 模型标识    — 当前模型名
   Layer 11: 环境提示    — 动态检测运行环境（macOS / Linux / WSL / Windows）
   Layer 12: 平台提示    — CLI 格式化指引（固定）
 """
@@ -18,7 +18,6 @@ import re
 import tempfile
 import threading
 from collections import OrderedDict
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -95,7 +94,7 @@ DELEGATE_GUIDANCE = (
 )
 
 SKILL_MANAGE_GUIDANCE = (
-    "# Skill evolution\n"
+    "# Skill management\n"
     "Use skill_manage to create reusable skills when you discover a pattern worth preserving.\n\n"
     "When to create a skill:\n"
     "- A non-trivial technique, fix, or workflow emerged that would clearly recur\n"
@@ -367,21 +366,19 @@ def build_env_hint() -> str:
 
 
 def build_env_block(cwd: Optional[str] = None) -> str:
-    """构建 <env> 事实块：工作目录、平台、OS 版本、日期。
+    """构建 <env> 事实块：工作目录、平台、OS 版本。
 
     与 build_env_hint()（行为引导）互补：env block 是事实信息，hint 是建议。
     """
-    cwd_path = str(Path(cwd).resolve()) if cwd else str(Path.cwd().resolve())
+    cwd_path = str(Path(cwd).resolve()) if cwd else str(Path(cwd).resolve())
     env_id = _detect_env() or "unknown"
     os_version = platform.platform()
-    today = datetime.now().strftime("%Y/%m/%d")
 
     return (
         "<env>\n"
         f"Working directory: {cwd_path}\n"
         f"Platform: {env_id}\n"
         f"OS Version: {os_version}\n"
-        f"Today's date: {today}\n"
         "</env>"
     )
 
@@ -636,7 +633,7 @@ def build_system_prompt(
     组装完整系统提示词（每 session 调用一次）。
 
     Args:
-        model_name:   模型名，注入时间戳行
+        model_name:   模型名，注入模型标识行
         memory_store: MemoryStore 实例，提供冻结快照；为 None 时跳过记忆层
         cwd:          工作目录，用于上下文文件发现；为 None 时用 os.getcwd()
         tool_names:   已注册工具名集合，用于条件注入工具行为引导
@@ -683,14 +680,11 @@ def build_system_prompt(
     if skills_idx:
         parts.append(skills_idx)
 
-    # Layer 10: 时间戳
-    now = datetime.now()
-    ts = f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
+    # Layer 10: 模型标识
     if model_name:
-        ts += f"\nModel: {model_name}"
-    parts.append(ts)
+        parts.append(f"Model: {model_name}")
 
-    # Layer 10.5: 环境事实块（cwd / platform / OS / date）
+    # Layer 10.5: 环境事实块（cwd / platform / OS）
     parts.append(build_env_block(cwd))
 
     # Layer 11: 环境提示（动态检测）

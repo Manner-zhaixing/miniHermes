@@ -61,11 +61,6 @@ _install_newline_key_sequences()
 
 def main():
     """启动 MiniHermes 交互式 CLI。"""
-    from minihermes.core.provider.provider import MODEL_NAME
-    from minihermes.core.context.compressor import CONTEXT_WINDOW
-    model_name = cfg.get_model_config().get("name") or MODEL_NAME
-    context_window = CONTEXT_WINDOW
-
     db = SessionDB()
 
     try:
@@ -73,6 +68,10 @@ def main():
     except Exception as e:
         print_error(f"Failed to initialize: {e}")
         sys.exit(1)
+
+    # 当前生效厂商/模型/上下文窗口（切换后运行时更新）
+    model_name = provider.model
+    context_window = provider.context_window
 
     renderer = StreamRenderer()
 

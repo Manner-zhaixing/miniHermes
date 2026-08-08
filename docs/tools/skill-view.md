@@ -25,7 +25,6 @@ def skill_view(name: str) -> str:
         available = [s["name"] for s in discover_skills()]
         return f"Error: skill '{name}' not found. Available: {', '.join(available)}"
 
-    record_usage(name)  # telemetry: total_uses++
     return content
 ```
 
@@ -34,10 +33,6 @@ def skill_view(name: str) -> str:
 ### 延迟加载
 
 System prompt 中只包含技能索引（一行一个技能名+简述），不注入完整的 SKILL.md 内容。Agent 需要时才调用 `skill_view` 加载，节省 system prompt token。
-
-### Telemetry 记录
-
-每次 `skill_view` 调用都通过 `record_usage(name)` 更新 `.usage.json`（total_uses++），为 Curator 的 stale/archive 决策提供数据。
 
 ### 友好错误消息
 

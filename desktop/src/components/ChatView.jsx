@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MessageItem, { WhaleAvatar } from './MessageItem.jsx';
+import ProviderIcon from './ProviderIcon.jsx';
+
+/** 思考强度档位中文标签（与后端 THINKING_EFFORT_LEVELS 对齐） */
+const THINK_LABELS = { off: '关闭思考', medium: '中', high: '高', max: '最高' };
 
 function fmtDay(ts) {
   const d = new Date(ts);
@@ -27,12 +31,12 @@ function withDividers(messages) {
 }
 
 export default function ChatView({
-  messages, streaming, activeSid, cwd, modelName,
+  messages, streaming, activeSid, cwd, providerInfo,
   tokens = { input: 0, output: 0, reasoning: 0 },
   fileCount, filesPanelOpen, onToggleFiles,
   onSend, onInterrupt, onTitleEdited,
   onCommand, commands = [], stopRequested = false,
-  onChangeCwd, mode = 'normal', onModeChange,
+  onChangeCwd, mode = 'normal', onModeChange, onModelChange,
 }) {
   const [draft, setDraft] = useState('');
   const listRef = useRef(null);
@@ -40,6 +44,17 @@ export default function ChatView({
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+
+  // 思考强度：每轮覆盖选择器。切换厂商时重置为厂商默认；同厂商刷新不打扰用户选择
+  const [thinkingEffort, setThinkingEffort] = useState(providerInfo?.thinking_effort || 'max');
+  const lastProviderRef = useRef(null);
+  useEffect(() => {
+    const name = providerInfo?.name;
+    if (name && name !== lastProviderRef.current) {
+      lastProviderRef.current = name;
+      setThinkingEffort(providerInfo.thinking_effort || 'max');
+    }
+  }, [providerInfo]);
 
   // 点击模式选择器外部时关闭
   useEffect(() => {
@@ -122,7 +137,8 @@ export default function ChatView({
       // Plan 模式：自动注入 __PLAN_MODE__: 前缀，后端进入只读规划流程
       onSend(`__PLAN_MODE__:${text}`);
     } else {
-      onSend(text);
+      // 普通模式：携带每轮思考强度覆盖
+      onSend(text, { thinking_effort: thinkingEffort });
     }
     inputRef.current?.focus();
   };
@@ -177,7 +193,15 @@ export default function ChatView({
       <div className="chat-header">
         <div className="chat-header-info">
           <span className="chat-title">对话 {activeTitle}</span>
-          {modelName && <em className="model-chip">{modelName}</em>}
+          {providerInfo && (
+            <div className="provider-badge" title={`${providerInfo.title} · ${providerInfo.model}`}>
+              <ProviderIcon name={providerInfo.name} title={providerInfo.title} size={20} />
+              <span className="provider-badge-text">
+                <span className="provider-badge-name">{providerInfo.title}</span>
+                <span className="provider-badge-model">{providerInfo.model || '未配置模型'}</span>
+              </span>
+            </div>
+          )}
         </div>
         <button
           className={`files-toggle ${filesPanelOpen ? 'active' : ''}`}
@@ -285,7 +309,30 @@ export default function ChatView({
                 </div>
               )}
             </div>
-            <span className="stats-model" title="当前模型">{modelName || '未配置模型'}</span>
+            <select
+              className="model-select"
+              value={providerInfo?.model || ''}
+              onChange={(e) => onModelChange(e.target.value)}
+              disabled={streaming || !providerInfo}
+              title="切换当前模型（全局生效，写入配置）"
+            >
+              {(providerInfo?.models || []).map((m) => (
+                <option key={m.id} value={m.id}>{m.id}</option>
+              ))}
+              {providerInfo && !(providerInfo.models || []).some((m) => m.id === providerInfo.model) && (
+                <option value={providerInfo.model}>{providerInfo.model}</option>
+              )}
+            </select>
+            <select
+              className="thinking-select"
+              value={thinkingEffort}
+              onChange={(e) => setThinkingEffort(e.target.value)}
+              title="思考强度：作用于本次及后续回复（切换厂商时自动重置）"
+            >
+              {(providerInfo?.thinking_effort_levels || ['off', 'medium', 'high', 'max']).map((lv) => (
+                <option key={lv} value={lv}>{THINK_LABELS[lv] || lv}</option>
+              ))}
+            </select>
             <TokenRing
               used={(tokens.input || 0) + (tokens.output || 0)}
               total={tokens.context_window || 1000000}

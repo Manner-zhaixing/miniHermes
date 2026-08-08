@@ -1,6 +1,10 @@
 """
 Provider 层：封装 OpenAI SDK，支持所有 OpenAI 兼容接口。
-（DeepSeek / Qwen / GPT 系列 / 本地 Ollama 等只需修改 config.yaml）
+
+多厂商支持：预设厂商注册表在 core/provider/registry.py（deepseek / glm / …），
+config.yaml 只存用户覆盖项（api_key / 模型 / 上下文窗口 / 思考强度）。
+Provider 零参构造时读取「预设默认 + 用户覆盖」合并后的 resolved 配置；
+也可显式传入 resolved config（运行时切换厂商时由上层传入新解析结果）。
 
 流式处理设计（参考 hermes run_agent.py 的双轨道机制）：
   - 展示轨道：每个 delta 立即回调 on_delta / on_thinking（实时展示）
@@ -19,10 +23,17 @@ from openai import OpenAI
 
 import minihermes.core.config as cfg
 from minihermes.core.output import _cprint, _DIM, _RST, _AMBER
+from minihermes.core.provider.registry import validate_thinking_effort
 
 
 MODEL_NAME = "deepseek-v4-pro"
 RETRY_API_MAX_RETRIES = 2
+
+# 上下文窗口兜底（未配置 context_window 时使用；compressor 里重导出）
+DEFAULT_CONTEXT_WINDOW = 1_000_000
+
+# 是否把思考过程转发给 renderer（写死 True：无需配置，桌面/CLI 均展示）
+SHOW_THINKING = True
 
 # ── 调试日志目录 ─────────────────────────────────────────────────────────────
 # malformed tool_calls 等罕见错误的现场会落盘到这里，方便事后分析
@@ -162,18 +173,32 @@ class StreamResult:
 
 
 class Provider:
-    def __init__(self):
-        model_cfg = cfg.get_model_config()
+    def __init__(self, config: dict | None = None):
+        """可传入 resolved 厂商配置；缺省时从 config 读取当前生效厂商。"""
+        if config is None:
+            config = cfg.get_provider_config()
+        self._cfg = config
+        self.api_key = config.get("api_key") or ""
+        self.has_api_key = bool(self.api_key)
         # 显式关闭 SDK 内置重试（默认 2 次）；由 stream() 统一管理重试，
         # 避免 SDK 重试 × 我们重试 出现 N×M 的请求倍增
+        # 未配置 key 时用占位符构造，让「切换厂商」不因缺 key 崩溃，
+        # 真实错误推迟到 stream() 时给出清晰提示。
         self.client = OpenAI(
-            base_url=model_cfg.get("base_url"),
-            api_key=model_cfg.get("api_key"),
+            base_url=config.get("base_url") or None,
+            api_key=self.api_key or "EMPTY_API_KEY",
             max_retries=0,
         )
-        self.model = model_cfg.get("name") or MODEL_NAME
-        self.show_thinking = model_cfg.get("show_thinking", False)
-        self.reason = model_cfg.get("reason", True)
+        self.model = config.get("name") or MODEL_NAME
+        self.provider_name = config.get("provider") or "deepseek"
+        self.show_thinking = SHOW_THINKING  # 写死：不再读 config.show_thinking
+        self.thinking_effort = validate_thinking_effort(config.get("thinking_effort", "max"))
+        self.context_window = int(config.get("context_window") or 0) or DEFAULT_CONTEXT_WINDOW
+
+    @property
+    def reason(self) -> bool:
+        """向后兼容：思考是否开启（off 以外的档位均为开启）。"""
+        return self.thinking_effort != "off"
 
     def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
         """浅拷贝 messages，只保留 API 认可的字段。
@@ -225,12 +250,23 @@ class Provider:
         on_tool_start: Optional[Callable[[str], None]] = None,
         interrupt_check: Optional[Callable[[], bool]] = None,
         renderer=None,
+        *,
+        thinking_effort: str | None = None,
     ) -> StreamResult:
         """发起一次流式 API 调用，对瞬态错误（429/5xx/网络中断）自动重试。
+
+        thinking_effort: 单次调用覆盖（桌面端对话窗口每轮自由选择）。
+            传非空值 → 本次覆盖 self.thinking_effort；None/空串 → 用厂商默认。
 
         重试策略：jittered exponential backoff，配置见 retry.api 段。
         永久错误（4xx auth / model not found 等）不重试，直接抛。
         """
+        if not self.has_api_key:
+            raise ValueError(
+                f"[provider={self.provider_name}] API Key 未配置，"
+                "请用 /setup 配置或用 /provider 切换其他厂商。"
+            )
+
         # API 层重试始终启用
         max_attempts = RETRY_API_MAX_RETRIES + 1
 
@@ -242,6 +278,7 @@ class Provider:
                     on_thinking=on_thinking,
                     on_tool_start=on_tool_start,
                     interrupt_check=interrupt_check,
+                    thinking_effort=thinking_effort,
                 )
             except Exception as exc:
                 # 用户主动中断 → 立即抛，不重试
@@ -288,6 +325,8 @@ class Provider:
         on_thinking: Optional[Callable[[str], None]] = None,
         on_tool_start: Optional[Callable[[str], None]] = None,
         interrupt_check: Optional[Callable[[], bool]] = None,
+        *,
+        thinking_effort: str | None = None,
     ) -> StreamResult:
         """单次流式 API 调用（不含重试逻辑）。"""
         kwargs = {
@@ -300,11 +339,13 @@ class Provider:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        if self.reason:
+        # 每轮覆盖：非空值优先（空串/None 落到厂商默认 thinking_effort）
+        effort = validate_thinking_effort(thinking_effort) if thinking_effort else self.thinking_effort
+        if effort != "off":
             kwargs["extra_body"] = {
                 "thinking": {"type": "enabled"},
                 "reasoning_mode": "enabled",
-                "reasoning_effort": "max",
+                "reasoning_effort": effort,
             }
         else:
             kwargs["extra_body"] = {

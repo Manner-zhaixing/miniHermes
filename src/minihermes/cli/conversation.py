@@ -7,10 +7,83 @@ from minihermes.cli.commands import handle_slash_command
 from minihermes.cli.plan_ui import make_plan_approval_callback
 from minihermes.core.services.plan import run_plan_flow, PLAN_MODE_PREFIX
 from minihermes.core.services.context_ref import preprocess as preprocess_refs
-from minihermes.core.services.nudge import maybe_trigger_nudge
 from minihermes.core.output import _cprint, _AMBER, _BOLD, _DIM, _GOLD, _RST, print_error
 from minihermes.cli.renderer import StreamRenderer
 from minihermes.core.session import SessionDB
+
+
+def _rebuild_provider(state: AppState) -> str:
+    """按当前配置重建 Provider/Agent 并更新共享状态，返回新模型名。
+
+    /provider /model 切换后调用：先刷新配置缓存，再以新解析结果构建
+    Provider，复用现有 Agent（switch_provider 保留 callbacks / db）。
+    """
+    import minihermes.core.config as cfg
+    from minihermes.core.provider import Provider
+
+    cfg.reload_config()
+    provider = Provider()
+    if not provider.has_api_key:
+        _cprint(f"\n{_AMBER}⚠ {provider.provider_name} 未配置 API Key，"
+                f"首个请求将失败。用 /setup 或编辑 config.yaml 添加。{_RST}")
+    state.agent.switch_provider(provider)
+    state.model_name = provider.model
+    state.context_window = provider.context_window
+    return provider.model
+
+
+def _handle_provider_command(user_input: str, state: AppState):
+    """/provider [name]：列出预设厂商或切换当前厂商（立即生效）。"""
+    import minihermes.core.config as cfg
+    from minihermes.core.provider import provider_names, get_preset
+
+    parts = user_input.strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    names = provider_names()
+
+    if not arg:
+        active = cfg.get_provider_config().get("provider")
+        lines = ["[available providers]"]
+        for name in names:
+            preset = get_preset(name)
+            marker = " ◀ active" if name == active else ""
+            title = preset.title if preset else name
+            lines.append(f"  {name} — {title}{marker}")
+        lines.append("[usage: /provider <name>]")
+        print("\n".join(lines))
+        return
+
+    if arg not in names:
+        print(f"[unknown provider: {arg}. Available: {', '.join(names)}]")
+        return
+
+    cfg.set_active_provider(arg)
+    new_model = _rebuild_provider(state)
+    print(f"[switched to provider: {arg} ({new_model})]")
+
+
+def _handle_model_command(user_input: str, state: AppState):
+    """/model [name]：列出当前厂商候选模型或切换模型（立即生效）。"""
+    import minihermes.core.config as cfg
+    from minihermes.core.provider import model_ids_for
+
+    parts = user_input.strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if not arg:
+        active = cfg.get_provider_config().get("provider")
+        current = cfg.get_provider_config().get("name")
+        candidates = model_ids_for(active)
+        lines = [f"[model for {active}] current: {current}"]
+        lines.append(f"  candidates: {', '.join(candidates) or '(none)'}")
+        lines.append("[usage: /model <model-name>]")
+        print("\n".join(lines))
+        return
+
+    active = cfg.get_provider_config().get("provider")
+    cfg.set_provider_override(active, model=arg)
+    new_model = _rebuild_provider(state)
+    print(f"[switched model: {new_model}]")
 
 
 def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
@@ -29,8 +102,22 @@ def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
             run_setup_cli(app_loop=state._main_loop)
         except Exception as e:
             print(f"[Setup error: {e}]")
-        agent.reset_token_tracking()
-        state.status_text = f" ⚕ {model_name[:26]}"
+        # 向导可能改了厂商/模型/上下文窗口 → 立即重建生效
+        _rebuild_provider(state)
+        state.status_text = f" ⚕ {state.model_name[:26]}"
+        state.invalidate()
+        return is_init_run, True
+
+    # /provider /model: 运行时切换厂商/模型（需 state 更新共享状态，单独处理）
+    if user_input.strip().lower().startswith("/provider"):
+        _handle_provider_command(user_input, state)
+        state.status_text = f" ⚕ {state.model_name[:26]}"
+        state.invalidate()
+        return is_init_run, True
+
+    if user_input.strip().lower().startswith("/model"):
+        _handle_model_command(user_input, state)
+        state.status_text = f" ⚕ {state.model_name[:26]}"
         state.invalidate()
         return is_init_run, True
 
@@ -102,7 +189,7 @@ def _execute_plan_mode(agent, state, db, renderer, model_name: str,
 
 def _post_process(agent, state, db, result, is_init_run: bool,
                    model_name: str, context_window: int, user_input: str):
-    """对话完成后的后处理：init 刷新、状态栏、session 跟踪、nudge。"""
+    """对话完成后的后处理：init 刷新、状态栏、session 跟踪。"""
     # /init 完成后：若 minihermes.md 已生成，刷新 system prompt
     if is_init_run:
         target = Path.cwd() / "minihermes.md"
@@ -132,9 +219,6 @@ def _post_process(agent, state, db, result, is_init_run: bool,
     if user_turns == 1:
         db.set_title(state.session_id, user_input[:10].rstrip())
 
-    # 进化系统：Nudge 触发
-    maybe_trigger_nudge(agent, state.conversation_history, user_turns)
-
     # 每 20 轮提示
     if user_turns > 0 and user_turns % 20 == 0:
         _cprint(
@@ -149,11 +233,12 @@ def conversation_loop(
     renderer: StreamRenderer,
 ):
     """后台消费用户输入并驱动 agent 对话。在 daemon 线程中运行。"""
-    agent = state.agent
-    model_name = state.model_name
-    context_window = state.context_window
-
     while not state.should_exit:
+        # 每轮从共享状态重取（/provider /model 切换后立即生效）
+        agent = state.agent
+        model_name = state.model_name
+        context_window = state.context_window
+
         user_input = state.input_queue.get()
         if user_input is None:
             state.should_exit = True
@@ -237,12 +322,5 @@ def conversation_loop(
         # ── 后处理 ────────────────────────────────────────────────
         _post_process(agent, state, db, result, is_init_run,
                        model_name, context_window, user_input)
-
-    # 退出前尝试运行 curator
-    try:
-        from minihermes.core.evolution.curator import maybe_run_curator
-        maybe_run_curator(provider=agent.provider)
-    except Exception:
-        pass
 
     db.end_session(state.session_id, end_reason="user_exit")

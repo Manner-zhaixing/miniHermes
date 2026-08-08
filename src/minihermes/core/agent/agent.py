@@ -23,7 +23,11 @@ from minihermes.core.rendering import Renderer
 from minihermes.core.session import SessionDB
 from minihermes.core.context.compressor import ContextCompressor
 from minihermes.core.context import ConversationContext
-import minihermes.core.config as cfg
+
+
+# 最大迭代次数写死（不再读 config.agent.max_iterations）：
+# 子 Agent 用 max_iterations_override 覆盖（plan 50 / delegate 50 / 进化 10）
+DEFAULT_MAX_ITERATIONS = 100
 
 
 @dataclass
@@ -61,11 +65,9 @@ class Agent:
         else:
             self.reload_system_prompt()
 
-        # 设置最大迭代次数
-        self.max_iterations = (
-            max_iterations_override
-            or cfg.get_model_config().get("max_iterations", 100)
-        )
+        # 设置最大迭代次数（写死默认；override 供子 Agent/plan/进化覆盖）
+        self._max_iterations = max_iterations_override or DEFAULT_MAX_ITERATIONS
+        self.max_iterations = self._max_iterations
         # 上下文压缩器
         self._compressor = ContextCompressor(provider)
         # 安全审批引擎
@@ -104,24 +106,6 @@ class Agent:
         """当前轮已使用的 LLM 调用次数。"""
         return self._ctx.budget_used
 
-    @property
-    def iters_since_skill(self) -> int:
-        """自上次技能使用以来的 LLM 迭代次数（进化系统用）。"""
-        return self._ctx.iters_since_skill
-
-    @iters_since_skill.setter
-    def iters_since_skill(self, value: int):
-        self._ctx.iters_since_skill = value
-
-    @property
-    def turns_since_memory(self) -> int:
-        """自上次记忆使用以来的对话轮次（进化系统用）。"""
-        return self._ctx.turns_since_memory
-
-    @turns_since_memory.setter
-    def turns_since_memory(self, value: int):
-        self._ctx.turns_since_memory = value
-
     def request_compress(self):
         """设置强制压缩标志，下次 LLM 调用前触发压缩（/compress 命令）。"""
         self._ctx.force_compress = True
@@ -145,6 +129,18 @@ class Agent:
             cwd=cwd,
             tool_names=tool_names,
         )
+
+    def switch_provider(self, provider: Provider):
+        """运行时切换厂商/模型：换 provider、重建压缩器、刷新系统提示。
+
+        保留 callbacks / db / 工具 schema / 审批引擎，避免整 Agent 重建。
+        切换后当前会话历史保留（由调用方决定是否 /clear）。
+        """
+        self.provider = provider
+        self.max_iterations = self._max_iterations  # 保留 __init__ 的 override（写死默认）
+        self._compressor = ContextCompressor(provider)  # 新上下文窗口立即生效
+        self.reload_system_prompt()                      # 系统提示里的 Model 标签刷新
+        self._ctx.reset_token_tracking()
 
     def _execute_tool(self, tool_name: str, tool_call: dict, args: dict) -> str:
         """
@@ -222,13 +218,7 @@ class Agent:
         if renderer:
             renderer.on_tool_result(tool_name, tool_result)
 
-        # ── 4. 进化计数器重置 ────────────────────────────────────
-        if tool_name == "skill_manage":
-            self._ctx.reset_skill_iter()
-        elif tool_name == "memory":
-            self._ctx.reset_memory_turn()
-
-        # ── 5. inline diff ───────────────────────────────────────
+        # ── 4. inline diff ───────────────────────────────────────
         if tool_name == "write_file" and old_content is not None and renderer:
             new_content = args.get("content", "")
             if old_content != new_content:
@@ -317,6 +307,8 @@ class Agent:
         history: list[dict],
         renderer: Optional[Renderer] = None,
         session_id: Optional[str] = None,
+        *,
+        thinking_effort: str | None = None,
     ) -> ConversationResult:
         """
         执行一次完整的对话轮次。agent运行的核心方法
@@ -326,6 +318,8 @@ class Agent:
             history:      历史消息列表（不含 system，由调用方维护）
             renderer:     流式渲染器
             session_id:   当前会话 ID（用于压缩时写入 DB）
+            thinking_effort: 每轮思考强度覆盖（桌面对话窗口选择器）。
+                None/空 → 用 Provider 默认；off/low/medium/high/max → 本轮所有 LLM 调用生效。
 
         Returns:
             ConversationResult
@@ -384,7 +378,7 @@ class Agent:
             if renderer:
                 renderer.reset()
 
-            # 调用 LLM（流式）
+            # 调用 LLM（流式）；thinking_effort 每轮覆盖（桌面选择器），None → 厂商默认
             result: StreamResult = self.provider.stream(
                 messages=messages,
                 tools=self._get_tool_schemas(),
@@ -393,6 +387,7 @@ class Agent:
                 on_tool_start=renderer.on_tool_start if renderer else None,
                 interrupt_check=lambda: self._interrupt_requested,
                 renderer=renderer,
+                thinking_effort=thinking_effort,
             )
 
             # 渲染器收尾
@@ -434,10 +429,6 @@ class Agent:
                 )
 
             final_reasoning = result.reasoning
-
-            # ── 进化计数器：每次 LLM API 调用 +1 ───────────────────────────
-            if tool_registry.get_tool_manager().has("skill_manage"):
-                self._ctx.increment_skill_iter()
 
             # ── 无工具调用：最终回复，退出循环 ────────────────────────────
             if not result.has_tool_calls:

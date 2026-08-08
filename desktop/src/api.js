@@ -127,7 +127,10 @@ export class BackendClient {
   loadSessions() { return this.get('/api/sessions'); }
   newSessionHttp() { return this.post('/api/sessions'); }
   getConfig() { return this.get('/api/config'); }
+  getProviders() { return this.get('/api/providers'); }
   saveConfig(patch) { return this.post('/api/config', patch); }
+  testProviderConnection(payload) { return this.post('/api/providers/test', payload); }
+  setActiveModel(payload) { return this.post('/api/providers/model', payload); }
   getMemory() { return this.get('/api/memory'); }
   saveMemory(patch) { return this.post('/api/memory', patch); }
   getSkills() { return this.get('/api/skills'); }

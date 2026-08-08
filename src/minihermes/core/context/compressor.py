@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 from minihermes.core.provider import Provider
+from minihermes.core.provider.provider import DEFAULT_CONTEXT_WINDOW as CONTEXT_WINDOW
 from minihermes.core.session import SessionDB
 
 
@@ -101,13 +102,11 @@ _PROTECT_FIRST_N = 2       # 头部保护消息数（不含 system prompt）
 _TAIL_RATIO = 0.2           # 尾部保护 token 预算占阈值的比例
 _THRESHOLD_PERCENT = 0.5    # 触发压缩的占比（达到窗口的 50% 时压缩）
 
-CONTEXT_WINDOW = 1_000_000
-
-
 class ContextCompressor:
     def __init__(self, provider: Provider):
         self._provider = provider
-        self._context_window = CONTEXT_WINDOW
+        # 上下文窗口随当前生效厂商/模型联动（Provider 已解析）
+        self._context_window = int(getattr(provider, "context_window", 0) or CONTEXT_WINDOW)
         self._threshold_tokens = int(self._context_window * _THRESHOLD_PERCENT)
 
         self._previous_summary: Optional[str] = None

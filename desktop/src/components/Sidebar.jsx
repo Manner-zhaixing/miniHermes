@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { WhaleAvatar } from './MessageItem.jsx';
+import ProviderIcon from './ProviderIcon.jsx';
 
 const APP_VERSION = 'v0.1.0'; // 与 package.json version 保持一致
 
@@ -31,7 +32,7 @@ function groupLabel(ts) {
 }
 
 export default function Sidebar({
-  sessions, activeSid, view, modelName, connected,
+  sessions, activeSid, view, providerInfo, connected,
   onNewSession, onResume, onDelete, onView,
 }) {
   const [filter, setFilter] = useState('');
@@ -129,8 +130,9 @@ export default function Sidebar({
       <div className="sidebar-footer">
         <div className="footer-status-row">
           <div className={`status-dot ${connected ? 'ok' : 'off'}`} />
-          <span className="footer-model" title={modelName}>
-            {modelName || '未配置模型'}
+          {providerInfo && <ProviderIcon name={providerInfo.name} title={providerInfo.title} size={14} />}
+          <span className="footer-model" title={providerInfo ? `${providerInfo.title} · ${providerInfo.model}` : ''}>
+            {providerInfo ? providerInfo.model || '未配置模型' : '未配置模型'}
           </span>
           <span className="footer-status">{connected ? '内核在线' : '重连中…'}</span>
         </div>

@@ -46,9 +46,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _bundled_skill_names() -> set:
+    """读取 .bundled_manifest 中的内置技能名（provenance 追踪；telemetry 已移除）。"""
+    manifest = USER_SKILLS_DIR / ".bundled_manifest"
+    if not manifest.is_file():
+        return set()
+    names = set()
+    for line in manifest.read_text(encoding="utf-8").strip().splitlines():
+        if ":" in line:
+            names.add(line.split(":", 1)[0].strip())
+    return names
+
+
 def _count_agent_skills() -> int:
-    from minihermes.core.evolution.telemetry import list_agent_created_skill_names
-    return len(list_agent_created_skill_names())
+    """统计用户目录下非 bundled 的技能数量（agent-created 上限保护）。"""
+    bundled = _bundled_skill_names()
+    count = 0
+    if USER_SKILLS_DIR.is_dir():
+        for entry in USER_SKILLS_DIR.iterdir():
+            if entry.is_dir() and (entry / "SKILL.md").is_file() and entry.name not in bundled:
+                count += 1
+    return count
 
 
 def _clear_skills_cache():
@@ -113,9 +131,6 @@ def _create_skill(name: str, description: str, body: str) -> str:
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md.write_text(f"---\n{frontmatter}\n---\n\n{body}", encoding="utf-8")
 
-    from minihermes.core.evolution.telemetry import init_usage
-    init_usage(name)
-
     return f"Created skill '{name}' at {skill_dir}"
 
 
@@ -150,9 +165,6 @@ def _edit_skill(name: str, body: str) -> str:
     }, allow_unicode=True, default_flow_style=False).strip()
 
     skill_md.write_text(f"---\n{new_fm}\n---\n\n{body}", encoding="utf-8")
-
-    from minihermes.core.evolution.telemetry import bump_patch
-    bump_patch(name)
 
     return f"Edited skill '{name}' successfully."
 
@@ -190,9 +202,6 @@ def _patch_skill(name: str, old_string: str, new_string: str) -> str:
 
     skill_md.write_text(new_content, encoding="utf-8")
 
-    from minihermes.core.evolution.telemetry import bump_patch
-    bump_patch(name)
-
     return f"Patched skill '{name}' successfully."
 
 
@@ -205,8 +214,7 @@ def _archive_skill(name: str) -> str:
         return f"Error: skill '{name}' not found."
 
     # Check provenance — only agent-created skills can be archived by agent
-    from minihermes.core.evolution.telemetry import is_agent_created
-    if not is_agent_created(name):
+    if name in _bundled_skill_names():
         return f"Error: skill '{name}' is not agent-created and cannot be archived by the agent."
 
     ARCHIVED_DIR.mkdir(parents=True, exist_ok=True)
@@ -214,9 +222,6 @@ def _archive_skill(name: str) -> str:
     if dest.exists():
         shutil.rmtree(dest)
     shutil.move(str(skill_dir), str(dest))
-
-    from minihermes.core.evolution.telemetry import set_state
-    set_state(name, "archived")
 
     return f"Archived skill '{name}' to {dest}"
 
@@ -235,9 +240,6 @@ def _restore_skill(name: str) -> str:
         return f"Error: skill '{name}' already exists in active skills."
 
     shutil.move(str(archived_path), str(dest_path))
-
-    from minihermes.core.evolution.telemetry import set_state
-    set_state(name, "active")
 
     return f"Restored skill '{name}' from archive."
 
@@ -321,8 +323,7 @@ def _remove_skill_file(name: str, file_path: str) -> str:
 
 def _list_skills() -> str:
     """List all skills with metadata as structured JSON."""
-    from minihermes.core.evolution.telemetry import get_usage, is_agent_created
-
+    bundled = _bundled_skill_names()
     skills = discover_skills()
     if not skills:
         return json.dumps({"success": True, "skills": []}, ensure_ascii=False)
@@ -330,15 +331,11 @@ def _list_skills() -> str:
     result = []
     for s in skills:
         name = s["name"]
-        usage = get_usage(name)
-        source = "bundled" if not is_agent_created(name) else "agent-created"
         result.append({
             "name": name,
             "description": s["description"],
-            "source": source,
-            "status": usage.get("state", "active"),
-            "use_count": usage.get("use_count", 0),
-            "patch_count": usage.get("patch_count", 0),
+            "source": "bundled" if name in bundled else "agent-created",
+            "status": "active",
             "category": s.get("category"),
         })
 

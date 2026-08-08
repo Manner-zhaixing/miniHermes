@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 import minihermes.core.config as cfg
 from minihermes.core import tools as tool_registry
-from minihermes.core.provider import Provider
+from minihermes.core.provider import Provider, test_provider_connection
 from minihermes.core.provider.provider import MODEL_NAME
 from minihermes.core.agent.agent import Agent
 from minihermes.core.session import SessionDB
@@ -264,6 +264,17 @@ class Kernel:
         self._ws_send = ws_send
         self.current_sid: str = ""
 
+    # ── 配置生效 ─────────────────────────────────────────
+    def rebuild_provider(self):
+        """按当前配置重建 Provider/Agent（配置保存后调用，立即生效）。
+
+        Provider 构造在缺 key 时也成功（stream 时才报错），因此
+        即使激活厂商未配 key，重建也不会抛异常，旧对话照常保留。
+        """
+        cfg.reload_config()
+        self.provider = Provider()
+        self.agent.switch_provider(self.provider)
+
     # ── 会话 ─────────────────────────────────────────────
     def new_session(self) -> str:
         sid = generate_session_id()
@@ -288,7 +299,7 @@ class Kernel:
         self.db.delete_session(sid)
 
     # ── 对话 ─────────────────────────────────────────────
-    def send_message(self, sid: str, content: str) -> dict:
+    def send_message(self, sid: str, content: str, thinking_effort: str | None = None) -> dict:
         with self._turn_lock:
             self.current_sid = sid
             history = self.db.get_messages_for_llm(sid)
@@ -299,6 +310,7 @@ class Kernel:
                 history=history,
                 renderer=renderer,
                 session_id=sid,
+                thinking_effort=thinking_effort,
             )
             return {
                 "final_response": result.final_response,
@@ -445,6 +457,7 @@ async def handle_ws_message(data: dict):
     if msg_type == "send_message":
         sid = data.get("session_id")
         content = data.get("content", "")
+        thinking_effort = data.get("thinking_effort")  # 对话窗口思考强度选择器（可选）
         if not sid or not content:
             manager.send({"type": "error", "message": "缺少 session_id 或 content"})
             return
@@ -478,7 +491,7 @@ async def handle_ws_message(data: dict):
             threading.Thread(target=_run_plan, args=(sid, plan_desc), daemon=True).start()
         else:
             threading.Thread(
-                target=run_turn, args=(sid, content), daemon=True
+                target=run_turn, args=(sid, content, thinking_effort), daemon=True
             ).start()
 
     elif msg_type == "command":
@@ -528,10 +541,10 @@ async def handle_ws_message(data: dict):
         manager.send({"type": "sessions", "sessions": k.sessions()})
 
 
-def run_turn(sid: str, content: str):
-    """在后台线程中执行一轮对话。"""
+def run_turn(sid: str, content: str, thinking_effort: str | None = None):
+    """在后台线程中执行一轮对话。thinking_effort 为对话窗口每轮选择的思考强度覆盖。"""
     try:
-        result = get_kernel().send_message(sid, content)
+        result = get_kernel().send_message(sid, content, thinking_effort=thinking_effort)
         manager.send({
             "type": "turn_end",
             "session_id": result["session_id"],
@@ -611,22 +624,110 @@ def api_get_config():
     return cfg.load()
 
 
+@app.get("/api/providers")
+def api_get_providers():
+    """返回预设厂商信息 + 当前激活 + 各厂商已配置状态（不回明文 key）。
+
+    供设置页渲染厂商下拉 / 模型候选 / 上下文与思考强度默认值。
+    """
+    from minihermes.core.provider import (
+        provider_names, get_preset, THINKING_EFFORT_LEVELS, validate_thinking_effort,
+    )
+    data = cfg.load()
+    active = data.get("provider", {}).get("active") or (provider_names()[0] if provider_names() else "deepseek")
+    if active not in provider_names():
+        active = provider_names()[0] if provider_names() else "deepseek"
+    plist = data.get("provider", {}).get("list", {})
+
+    providers = []
+    for name in provider_names():
+        preset = get_preset(name)
+        if preset is None:
+            continue
+        overrides = plist.get(name) or {}
+        has_key = bool(overrides.get("api_key")) or bool(
+            preset.env_key and os.environ.get(preset.env_key)
+        )
+        providers.append({
+            "name": name,
+            "title": preset.title,
+            "base_url": overrides.get("base_url") or preset.base_url,
+            # 每项带预设上下文窗口，供设置页模型列表标注（CLI 用 model_ids_for 不受影响）
+            "models": [{"id": m.id, "context_window": m.context_window} for m in preset.models],
+            "model": overrides.get("model") or preset.default_model,
+            "context_window": int(overrides.get("context_window") or 0) or preset.default_context_window,
+            "thinking_effort": validate_thinking_effort(overrides.get("thinking_effort") or preset.default_thinking_effort),
+            "thinking_effort_levels": list(THINKING_EFFORT_LEVELS),
+            "has_key": has_key,
+            "env_key": preset.env_key,
+        })
+    return {"active": active, "providers": providers}
+
+
+class TestBody(BaseModel):
+    provider: str
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+class SetModelBody(BaseModel):
+    model: str
+    provider: str | None = None
+
+
+@app.post("/api/providers/model")
+def api_set_provider_model(body: SetModelBody):
+    """对话窗口快速切换当前厂商模型（全局生效，等价 CLI /model）。
+
+    写 provider.list.<name>.model 后重建 Provider/Agent，立即反映到
+    徽章 / 侧栏（前端随后 refreshProviderInfo）。不碰 API Key。
+    """
+    from minihermes.core.provider import provider_names
+
+    name = body.provider or (cfg.load().get("provider") or {}).get("active")
+    if not name or name not in provider_names():
+        return {"ok": False, "error": f"未知厂商: {name or '(空)'}"}
+    if not (body.model or "").strip():
+        return {"ok": False, "error": "模型不能为空"}
+    try:
+        cfg.set_provider_override(name, model=body.model)
+        get_kernel().rebuild_provider()  # 内部 reload_config + 重建
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "model": body.model}
+
+
+@app.post("/api/providers/test")
+def api_test_provider(body: TestBody):
+    """用 GET {base_url}/models 验证某厂商的 key / base_url 是否可用。
+
+    入参传的是设置页尚未保存的 pending 值（key 不会落盘）；不碰 live kernel，
+    因此可测任意厂商（含未激活的）。永不抛异常，返回 {ok, models, error, ...}。
+    """
+    return test_provider_connection(
+        body.provider,
+        api_key=body.api_key or "",
+        base_url=body.base_url or "",
+    )
+
+
 class ConfigBody(BaseModel):
     model: dict | None = None
+    provider: dict | None = None
+    agent: dict | None = None
     search: dict | None = None
     code_execution: dict | None = None
-    evolution: dict | None = None
     general: dict | None = None
 
 
 @app.post("/api/config")
 def api_set_config(body: ConfigBody):
-    """浅合并写入 ~/.minihermes/config.yaml。"""
+    """浅合并写入 ~/.minihermes/config.yaml，并立即重建 Provider/Agent。"""
     data = {}
     if CONFIG_PATH.exists():
         import yaml
         data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
-    for key in ("model", "search", "code_execution", "evolution", "general"):
+    for key in ("model", "provider", "agent", "search", "code_execution", "general"):
         value = getattr(body, key)
         if value is not None:
             data[key] = value
@@ -635,6 +736,12 @@ def api_set_config(body: ConfigBody):
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    # 配置变更即时生效（厂商/模型/上下文窗口随新 Provider 切换）
+    try:
+        get_kernel().rebuild_provider()
+    except Exception as e:
+        # 重建失败不阻断保存（例如底层 SDK 异常），返回 ok 但附带提示
+        return {"ok": True, "config": data, "rebuild_warning": str(e)}
     return {"ok": True, "config": data}
 
 

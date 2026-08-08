@@ -14,11 +14,9 @@ def generate_session_id() -> str:
 
 
 def context_window() -> int:
-    """当前配置的上下文窗口大小（tokens）。"""
+    """当前生效厂商/模型的上下文窗口大小（tokens）。"""
     try:
-        from minihermes.core.context.compressor import CONTEXT_WINDOW
-        cw = int(cfg.load().get("context", {}).get("context_window", 0) or 0)
-        return cw or int(CONTEXT_WINDOW or 0) or 1000000
+        return int(cfg.get_provider_config().get("context_window") or 0) or 1000000
     except Exception:
         return 1000000
 

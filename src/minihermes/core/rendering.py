@@ -26,7 +26,7 @@ class Renderer(Protocol):
 
 
 class NullRenderer:
-    """无操作渲染器：需要静默输出的场景（后台 nudge、无头测试）。"""
+    """无操作渲染器：需要静默输出的场景（后台线程、无头测试）。"""
 
     def reset(self):
         pass

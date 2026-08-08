@@ -104,7 +104,7 @@ def run_setup_wizard() -> bool:
         _console.print(Panel(
             Text.from_markup(
                 "[bold gold1]Welcome to MiniHermes![/]\n\n"
-                "首次运行，需要配置模型连接信息。\n"
+                "首次运行，需要选择服务厂商并配置 API Key。\n"
                 "完成后配置将保存到 [dim]~/.minihermes/config.yaml[/]"
             ),
             border_style="gold1",
@@ -112,14 +112,26 @@ def run_setup_wizard() -> bool:
         ))
         _console.print()
 
-        # ── 1. 模型配置（必填） ──
-        _console.print("  [bold]◆ 模型配置[/]（必填）\n")
+        from minihermes.core.provider import provider_names, get_preset, model_ids_for
 
-        base_url = ""
-        while not base_url:
-            base_url = _prompt("API Base URL (OpenAI 兼容)")
-            if not base_url:
-                _console.print("    [red]Base URL 不能为空[/]")
+        # ── 1. 服务厂商（必填） ──
+        _console.print("  [bold]◆ 服务厂商[/]（必填）\n")
+        names = provider_names()
+        for name in names:
+            preset = get_preset(name)
+            title = preset.title if preset else name
+            _console.print(f"    [cyan]{name}[/] — {title}")
+
+        _console.print()
+        provider_name = ""
+        while provider_name not in names:
+            provider_name = _prompt("选择厂商", default=names[0] if names else "").strip()
+            if provider_name not in names:
+                _console.print("    [red]无效的厂商，请从列表中选择[/]")
+
+        preset = get_preset(provider_name)
+        if preset:
+            _console.print(f"    Base URL: {preset.base_url}")
 
         api_key = ""
         while not api_key:
@@ -129,7 +141,16 @@ def run_setup_wizard() -> bool:
 
         _console.print()
 
-        # ── 2. 搜索配置（可选） ──
+        # ── 2. 模型（可选，回车用预设默认） ──
+        _console.print("  [bold]◆ 模型[/]（可选，回车用预设默认）\n")
+        default_model = preset.default_model if preset else ""
+        candidates = model_ids_for(provider_name)
+        if candidates:
+            _console.print(f"    候选: {', '.join(candidates)}")
+        model = _prompt("模型", default=default_model).strip() or default_model
+        _console.print()
+
+        # ── 3. 搜索配置（可选） ──
         _console.print("  [bold]◆ 搜索配置[/]（可选，回车跳过）\n")
         _console.print("    Exa AI 搜索引擎 — 专为 AI Agent 设计")
         _console.print("    免费注册获取 API Key：https://dashboard.exa.ai")
@@ -137,7 +158,7 @@ def run_setup_wizard() -> bool:
         search_api_key = _prompt("Exa API Key", secret=True)
         _console.print()
 
-        # ── 3. 代码沙箱配置（可选） ──
+        # ── 4. 代码沙箱配置（可选） ──
         _console.print("  [bold]◆ 代码沙箱配置[/]（可选，回车跳过）\n")
         code_api_key = _prompt("七牛 E2B 沙箱 API Key", secret=True)
         _console.print()
@@ -145,8 +166,12 @@ def run_setup_wizard() -> bool:
         # ── 写入配置 ──
         cfg = read_user_config()
 
-        cfg["model"]["base_url"] = base_url
-        cfg["model"]["api_key"] = api_key
+        provider = cfg.setdefault("provider", {})
+        entry = provider.setdefault("list", {}).setdefault(provider_name, {})
+        entry["api_key"] = api_key
+        if model:
+            entry["model"] = model
+        provider["active"] = provider_name
 
         if search_api_key:
             cfg["search"]["api_key"] = search_api_key
@@ -321,7 +346,7 @@ def _run_setup_cli_core() -> bool:
         print(file=_out)
         print(f"  {G}╭{'─' * inner}╮{_R}", file=_out)
         _box_line(G, inner, ' ', "✓  Config saved", mid_color=BG)
-        _box_line(G, inner, ' ', "Restart MiniHermes for changes to take effect.",
+        _box_line(G, inner, ' ', "Changes take effect immediately.",
                   mid_color=D)
         print(f"  {G}╰{'─' * inner}╯{_R}", file=_out)
         print(file=_out)
@@ -338,79 +363,100 @@ def _run_setup_cli_core() -> bool:
 
     try:
         cfg = read_user_config()
-        model_cfg: dict[str, Any] = cfg.get("model", {})
+        provider_cfg: dict[str, Any] = cfg.get("provider", {})
+        agent_cfg: dict[str, Any] = cfg.get("agent", {})
         search_cfg: dict[str, Any] = cfg.get("search", {})
         code_cfg: dict[str, Any] = cfg.get("code_execution", {})
-        evo_cfg: dict[str, Any] = cfg.get("evolution", {})
+
+        from minihermes.core.provider import (
+            provider_names, get_preset, model_ids_for, THINKING_EFFORT_LEVELS,
+        )
+        _names = provider_names()
 
 
         # ── 标题 ──────────────────────────────────────────────────────────
         _header("MiniHermes Setup")
 
-        # ═══════════════════ 1. Model Connection ═══════════════════════════
-        _section(1, "Model Connection")
+        # ═══════════════════ 1. Provider Connection ═══════════════════════
+        _section(1, "Provider Connection")
 
-        _field("Model Name", model_cfg.get("name", "deepseek-v4-pro"))
-        model_name = _prompt("  ▸ Model Name",
-                             default=model_cfg.get("name", "deepseek-v4-pro"))
-        model_cfg["name"] = model_name
-
-        # Base URL
-        current_base = model_cfg.get("base_url", "")
-        _field("API Base URL", current_base, required=not bool(current_base))
+        # 厂商选择
+        current_provider = provider_cfg.get("active") or (_names[0] if _names else "deepseek")
+        if current_provider not in _names:
+            current_provider = _names[0] if _names else "deepseek"
+        _field("Provider", current_provider)
+        _hint(" / ".join(_names))
         while True:
-            base_url = _prompt("  ▸ API Base URL", default=current_base)
-            if base_url.strip():
-                model_cfg["base_url"] = base_url.strip()
+            prov = _prompt("  ▸ Provider", default=current_provider).strip()
+            if prov in _names:
+                provider_cfg["active"] = prov
+                current_provider = prov
                 break
-            if current_base:
-                break
-            _error("Base URL cannot be empty")
+            _error(f"Unknown provider: {prov} (available: {', '.join(_names)})")
 
-        # API Key
-        current_key = model_cfg.get("api_key", "")
+        preset = get_preset(current_provider)
+        entry = provider_cfg.setdefault("list", {}).setdefault(current_provider, {})
+        default_effort = preset.default_thinking_effort if preset else "max"
+
+        # API Key（必填）
+        current_key = entry.get("api_key", "")
         _field("API Key", _mask_secret(current_key), required=not bool(current_key))
         while True:
             api_key = _prompt("  ▸ API Key",
                               default=_mask_secret(current_key) if current_key else "",
                               secret=True)
             if api_key and api_key != _mask_secret(current_key):
-                model_cfg["api_key"] = api_key
+                entry["api_key"] = api_key
                 break
             if current_key:
                 break
             _error("API Key cannot be empty")
 
-        # ═══════════════════ 2. Model Parameters ═══════════════════════════
-        print(file=_out)
-        _section(2, "Model Parameters")
+        # Model（候选 + 自由输入）
+        current_model = entry.get("model") or (preset.default_model if preset else "")
+        _field("Model", current_model)
+        if preset:
+            _hint("candidates: " + ", ".join(model_ids_for(current_provider)))
+        model = _prompt("  ▸ Model", default=current_model).strip() or current_model
+        if model:
+            entry["model"] = model
 
-        _field("Max Iterations", str(model_cfg.get("max_iterations", 100)))
-        max_iter = _prompt("  ▸ Max Iterations",
-                           default=str(model_cfg.get("max_iterations", 100)))
-        if (n := _normalize_int(max_iter)) is not None and n > 0:
-            model_cfg["max_iterations"] = n
+        # Base URL（可选覆盖，留空用预设默认）
+        preset_base = preset.base_url if preset else ""
+        current_base = entry.get("base_url", "")
+        _field("Base URL", current_base or preset_base)
+        _hint("留空使用预设默认")
+        base_url = _prompt("  ▸ Base URL", default=current_base).strip()
+        if base_url and base_url != current_base:
+            entry["base_url"] = base_url
+        elif current_base and not base_url:
+            entry.pop("base_url", None)
+
+        # Context Window（0 = 预设默认）
+        current_cw = int(entry.get("context_window") or 0)
+        _field("Context Window",
+               str(current_cw) if current_cw else f"default ({preset.default_context_window if preset else 0})")
+        _hint("0 = 使用预设默认")
+        cw = _prompt("  ▸ Context Window", default=str(current_cw) if current_cw else "0")
+        if (n := _normalize_int(cw)) is not None and n >= 0:
+            entry["context_window"] = n
         elif n is not None:
-            _error("Must be a positive integer, keeping current value")
+            _error("Must be a non-negative integer, keeping current value")
 
-        current_thinking = model_cfg.get("show_thinking", True)
-        _field("Show Thinking", "yes" if current_thinking else "no")
-        thinking = _prompt("  ▸ Show Thinking",
-                           default="yes" if current_thinking else "no")
-        if (b := _normalize_bool(thinking)) is not None:
-            model_cfg["show_thinking"] = b
+        # Thinking Effort（off|low|medium|high|max；空 = 预设默认）
+        current_effort = entry.get("thinking_effort", "")
+        _field("Thinking Effort", current_effort or f"default ({default_effort})")
+        _hint(" / ".join(THINKING_EFFORT_LEVELS) + "（留空用默认）")
+        effort = _prompt("  ▸ Thinking Effort", default=current_effort or default_effort).strip()
+        if effort in THINKING_EFFORT_LEVELS:
+            entry["thinking_effort"] = "" if effort == default_effort else effort
+        elif effort:
+            _error(f"Invalid effort: {effort} (use: {', '.join(THINKING_EFFORT_LEVELS)})")
 
-        current_reason = model_cfg.get("reason", True)
-        _field("Reason", "yes" if current_reason else "no")
-        _hint("Enable thinking/reasoning mode")
-        reason = _prompt("  ▸ Reason",
-                         default="yes" if current_reason else "no")
-        if (b := _normalize_bool(reason)) is not None:
-            model_cfg["reason"] = b
-
-        # ═══════════════════ 3. Search ═════════════════════════════════════
+        # ═══════════════════ 2. Search ═════════════════════════════════════
+        # （max_iterations / show_thinking 已写死进代码，不再引导配置）
         print(file=_out)
-        _section(3, "Search — Exa AI")
+        _section(2, "Search — Exa AI")
 
         _info("AI-native search engine for agents")
         _info("Free API key → https://dashboard.exa.ai")
@@ -430,9 +476,9 @@ def _run_setup_cli_core() -> bool:
         if (n := _normalize_int(search_count)) is not None and n > 0:
             search_cfg["count"] = n
 
-        # ═══════════════════ 4. Code Execution ═════════════════════════════
+        # ═══════════════════ 3. Code Execution ═════════════════════════════
         print(file=_out)
-        _section(4, "Code Execution — E2B Sandbox")
+        _section(3, "Code Execution — E2B Sandbox")
 
         current_code_key = code_cfg.get("api_key", "")
         _field("E2B Sandbox API Key", _mask_secret(current_code_key))
@@ -442,38 +488,24 @@ def _run_setup_cli_core() -> bool:
         if code_key and code_key != _mask_secret(current_code_key):
             code_cfg["api_key"] = code_key
 
-        # ═══════════════════ 5. System ═════════════════════════════════════
-        print(file=_out)
-        _section(5, "System")
-
-        evo_enabled = evo_cfg.get("enabled", True)
-        _field("Evolution System", "yes" if evo_enabled else "no")
-        evo = _prompt("  ▸ Evolution System",
-                      default="yes" if evo_enabled else "no")
-        if (b := _normalize_bool(evo)) is not None:
-            evo_cfg["enabled"] = b
-        cfg["evolution"] = evo_cfg
-
         # ── 写回 ──────────────────────────────────────────────────────────
-        cfg["model"] = model_cfg
+        cfg["provider"] = provider_cfg
+        cfg["agent"] = agent_cfg
         cfg["search"] = search_cfg
         cfg["code_execution"] = code_cfg
-        cfg["evolution"] = evo_cfg
 
         config_path = write_user_config(cfg)
 
         # ── 汇总 ───────────────────────────────────────────────────────────
         _summary_header()
-        _summary_row("Model", "Name", model_cfg.get("name", ""))
-        _summary_row("Model", "Base URL", model_cfg.get("base_url", ""))
-        _summary_row("Model", "API Key", _mask_secret(model_cfg.get("api_key", "")))
-        _summary_row("Model", "Max Iterations", str(model_cfg.get("max_iterations", "")))
-        _summary_row("Model", "Show Thinking", "yes" if model_cfg.get("show_thinking") else "no")
-        _summary_row("Model", "Reason", "yes" if model_cfg.get("reason", True) else "no")
+        _summary_row("Provider", "Active", provider_cfg.get("active", ""))
+        _summary_row("Model", "Name", entry.get("model") or (preset.default_model if preset else ""))
+        _summary_row("Model", "Base URL", entry.get("base_url") or (preset.base_url if preset else ""))
+        _summary_row("Model", "API Key", _mask_secret(entry.get("api_key", "")))
+        _summary_row("Agent", "Thinking Effort", entry.get("thinking_effort") or f"default ({default_effort})")
         _summary_row("Search", "API Key", _mask_secret(search_cfg.get("api_key", "")))
         _summary_row("Search", "Count", str(search_cfg.get("count", "")))
         _summary_row("Code Exec", "API Key", _mask_secret(code_cfg.get("api_key", "")))
-        _summary_row("Evolution", "Enabled", "yes" if evo_cfg.get("enabled") else "no")
         print(f"  {D}{'─' * WIDTH}{_R}", file=_out)
         _done(f"Saved to {config_path}")
         _success_box()

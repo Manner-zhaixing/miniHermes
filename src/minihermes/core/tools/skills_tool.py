@@ -123,13 +123,6 @@ def _skill_view_impl(
             session_id=session_id,
         )
 
-    # Record usage
-    try:
-        from minihermes.core.evolution.telemetry import record_usage
-        record_usage(name)
-    except ImportError:
-        pass
-
     return json.dumps({
         "success": True,
         "name": info["name"],

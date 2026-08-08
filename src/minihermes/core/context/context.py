@@ -68,10 +68,6 @@ class ConversationContext:
         # 压缩触发
         self._force_compress: bool = False
 
-        # 进化计数器
-        self._iters_since_skill: int = 0
-        self._turns_since_memory: int = 0
-
     # ── Token 估算 ──────────────────────────────────────────
 
     def estimate_tokens(self, messages: list[dict]) -> int:
@@ -133,38 +129,3 @@ class ConversationContext:
         """设置强制压缩标志（/compress 命令调用）。"""
         self._force_compress = value
 
-    # ── 进化计数器 ──────────────────────────────────────────
-
-    @property
-    def iters_since_skill(self) -> int:
-        """自上次 skill_manage 调用以来的 LLM 迭代次数。"""
-        return self._iters_since_skill
-
-    @iters_since_skill.setter
-    def iters_since_skill(self, value: int):
-        self._iters_since_skill = value
-
-    def increment_skill_iter(self):
-        """每次 LLM 调用后递增技能迭代计数器。"""
-        self._iters_since_skill += 1
-
-    def reset_skill_iter(self):
-        """skill_manage 工具调用后归零。"""
-        self._iters_since_skill = 0
-
-    @property
-    def turns_since_memory(self) -> int:
-        """自上次 memory 调用以来的对话轮次。"""
-        return self._turns_since_memory
-
-    @turns_since_memory.setter
-    def turns_since_memory(self, value: int):
-        self._turns_since_memory = value
-
-    def increment_memory_turn(self):
-        """每轮对话后递增记忆轮次计数器。"""
-        self._turns_since_memory += 1
-
-    def reset_memory_turn(self):
-        """memory 工具调用后归零。"""
-        self._turns_since_memory = 0

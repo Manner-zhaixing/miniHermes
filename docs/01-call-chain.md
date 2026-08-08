@@ -42,7 +42,6 @@ Agent.__init__ 内：
 2. `build_system_prompt()` → 多层组装 system prompt
 3. 计算 `_fixed_overhead` = system_prompt + tool schemas 的 token 估算
 4. 初始化 `ContextCompressor`
-5. 初始化进化计数器 `_turns_since_memory = 0`, `_iters_since_skill = 0`
 
 ### 1.4 会话与技能
 
@@ -69,7 +68,6 @@ app.run()  # 主线程进入 UI 事件循环
   → app.exit()
   → 主线程退出 event loop
   → daemon 线程退出
-  → maybe_run_curator(provider) → 技能库维护
   → db.end_session(session_id, end_reason="user_exit")
 ```
 
@@ -153,8 +151,7 @@ conversation_loop() 继续:
   2. 状态栏更新
   3. state.conversation_history = result.messages
   4. state.session_id = result.session_id  # 压缩后可能变化
-  5. _try_nudge() → 进化触发检查
-  6. 每 20 轮提示 /clear
+  5. 每 20 轮提示 /clear
 ```
 
 ---
@@ -194,8 +191,6 @@ conversation_loop plan 分支:
 | 上下文压缩 | context/compressor.py | compress() |
 | Plan Mode | cli/plan.py | generate_plan_path() |
 | 子 Agent 委派 | agent/delegate.py | run_delegate() |
-| 进化 Nudge | evolution/nudge.py | spawn_nudge() |
-| Curator | evolution/curator.py | run_curator() |
 | Session 分裂 | session/db.py | create_child_session() |
 | Session 恢复 | session/db.py | resolve_resume_session_id() |
 | 流式渲染 | renderer/renderer.py | StreamRenderer |
@@ -286,26 +281,4 @@ Agent._execute_tool("delegate_task", ...)
         │     └── max_iterations=15
         ├── child.run_conversation(task, [], renderer)
         └── return DelegationResult
-```
-
-### 5.6 进化系统触发流程
-
-```
-conversation_loop 每次循环结束:
-  _try_nudge(state, provider):
-
-  Memory Nudge:
-    if _turns_since_memory >= 10:
-      spawn_nudge(provider, messages, "memory")
-      _turns_since_memory = 0
-
-  Skill Nudge:
-    if _iters_since_skill >= 10:
-      spawn_nudge(provider, messages, "skill")
-      _iters_since_skill = 0
-
-session 退出:
-  maybe_run_curator(provider):
-    lifecycle_transitions()  # stale/archive
-    consolidate(provider)    # LLM 合并
 ```

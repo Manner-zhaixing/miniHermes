@@ -58,7 +58,6 @@ updated_at: {now}
 
 {body}"""
     write_skill(name, content)
-    init_usage(name)  # telemetry 初始化
 ```
 
 ### patch
@@ -129,7 +128,3 @@ updated_at: "2026-06-26T10:00:00"
 ### 数量限制
 
 max 20 auto 技能，防止 Agent 无限创建。
-
-### Telemetry 集成
-
-create → `init_usage(name)` 初始化 `.usage.json`。

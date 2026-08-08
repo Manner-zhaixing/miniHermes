@@ -38,10 +38,6 @@ class Agent:
         # 压缩
         self.compressor = ContextCompressor(provider)
 
-        # 进化计数器
-        self._turns_since_memory = 0
-        self._iters_since_skill = 0
-
         # Token 追踪
         self._fixed_overhead = self._estimate_tokens(
             [{"role": "system", "content": self.system_prompt}]
@@ -137,9 +133,6 @@ def run_conversation(self, user_message, history, renderer, session_id):
         messages.append(assistant_msg)
         self.db.append_message(final_session_id, assistant_msg)
 
-        # 进化计数器
-        self._iters_since_skill += 1
-
         # 无 tool_calls → 最终响应
         if not stream_result.has_tool_calls:
             final_response = stream_result.content
@@ -177,12 +170,6 @@ def run_conversation(self, user_message, history, renderer, session_id):
 
             # 执行工具
             tool_result = self._execute_tool(tool_name, tc, args)
-
-            # 进化计数器重置
-            if tool_name == "memory":
-                self._turns_since_memory = 0
-            elif tool_name == "skill_manage":
-                self._iters_since_skill = 0
 
             # 写入结果
             tool_msg = build_tool_result_message(tc["id"], tool_result)
