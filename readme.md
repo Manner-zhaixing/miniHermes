@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="asset/1.png" alt="MiniHermes" width="420" />
-</p>
-
 <h1 align="center">MiniHermes</h1>
 
 <p align="center">
@@ -85,16 +81,6 @@ minihermes
 | [Agent 引擎](docs/07-agent.md) | 对话循环与子 Agent |
 | [CLI 界面](docs/08-cli.md) | 终端 UI |
 | [会话持久化](docs/09-session.md) | SQLite + FTS5 |
-
-## 演示
-
-![demo-1](asset/1.png)
-
-![demo-2](asset/2.png)
-
-![demo-3](asset/3.png)
-
-![demo-4](asset/4.png)
 
 ## License
 
