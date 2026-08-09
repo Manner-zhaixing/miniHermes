@@ -37,9 +37,13 @@ export default function ChatView({
   onSend, onInterrupt, onTitleEdited,
   onCommand, commands = [], stopRequested = false,
   onChangeCwd, mode = 'normal', onModeChange, onModelChange,
+  activePersona = null, onOpenExperts,
 }) {
   const [draft, setDraft] = useState('');
   const listRef = useRef(null);
+  // 用户是否停在底部附近：上滑看历史时不强制拉回底部；吸附后恢复自动跟底
+  const stickToBottomRef = useRef(true);
+  const STICK_TOLERANCE = 80;
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   const modeMenuRef = useRef(null);
@@ -68,9 +72,21 @@ export default function ChatView({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [modeMenuOpen]);
 
+  // 切换会话时重置吸附状态（避免沿用上个会话的「已上滑」标记）
+  useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [activeSid]);
+
+  const handleListScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TOLERANCE;
+  };
+
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, streaming]);
 
   const handleKeyDown = (e) => {
@@ -193,6 +209,17 @@ export default function ChatView({
       <div className="chat-header">
         <div className="chat-header-info">
           <span className="chat-title">对话 {activeTitle}</span>
+          {activePersona && (
+            <button
+              className="expert-badge"
+              onClick={onOpenExperts}
+              title={`当前专家: ${activePersona.name}（点击换专家 = 新建会话）`}
+            >
+              <span className="expert-badge-icon">{activePersona.icon || '🧠'}</span>
+              <span className="expert-badge-name">{activePersona.name}</span>
+              {activePersona.expert_type === 'team' && <span className="expert-team-badge sm">专家团</span>}
+            </button>
+          )}
           {providerInfo && (
             <div className="provider-badge" title={`${providerInfo.title} · ${providerInfo.model}`}>
               <ProviderIcon name={providerInfo.name} title={providerInfo.title} size={20} />
@@ -213,7 +240,7 @@ export default function ChatView({
         </button>
       </div>
 
-      <div className="message-list" ref={listRef}>
+      <div className="message-list" ref={listRef} onScroll={handleListScroll}>
         {messages.length === 0 && !streaming && (
           <div className="empty-state">
             <div className="empty-logo"><WhaleAvatar size={60} /></div>

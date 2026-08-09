@@ -1,7 +1,57 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import ToolCallCard from './ToolCallCard.jsx';
+import TodoCard from './TodoCard.jsx';
+import MermaidDiagram from './MermaidDiagram.jsx';
+
+// 模型输出 HTML 图的消毒 schema：默认 schema 已允许 code 的 language-* className；
+// 补放开全局 style/className，让模型的内联样式 HTML 图能渲染。script/事件/javascript: 仍被默认剥除。
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    '*': [...(defaultSchema.attributes['*'] || []), 'className', 'style'],
+  },
+};
+
+/** rehype 插件：修复 rehype-raw（hast-util-raw 重序列化）在表格周围把表内空白
+ *  文本节点提升为巨型换行节点的问题——把纯空白文本节点压到 ≤1 空行（\n\n），
+ *  消除正文里的大段空行。pre/code/script/style/textarea 等空白有语义的容器跳过。 */
+function rehypeCollapseWhitespace() {
+  const SIGNIFICANT = new Set(['pre', 'code', 'script', 'style', 'textarea']);
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.children)) return;
+    if (SIGNIFICANT.has(String(node.tagName || '').toLowerCase())) return;
+    const out = [];
+    let sawBlank = false; // out 尾部是否已压入一个空行节点（连续空白只留一个）
+    for (const child of node.children) {
+      if (child.type === 'text' && !/\S/.test(child.value)) {
+        // 纯空白文本节点：含换行 → 合并为 1 个空行；仅空格/制表符 → 丢弃
+        if (/(\n|\r)/.test(child.value) && !sawBlank) {
+          out.push({ type: 'text', value: '\n\n' });
+          sawBlank = true;
+        }
+        continue;
+      }
+      sawBlank = false;
+      walk(child);
+      out.push(child);
+    }
+    // 去掉容器末尾的空白文本节点（raw HTML 块常以换行结尾）
+    while (out.length && out[out.length - 1].type === 'text' && !/\S/.test(out[out.length - 1].value)) {
+      out.pop();
+    }
+    node.children = out;
+  };
+  return walk;
+}
+
+/** rehype 管道：raw（模型可输出内联 HTML 图）→ sanitize（剥脚本/事件/javascript:）
+ *  → 空白折叠（修复 rehype-raw 在表格周围注入巨型空行的 bug）。顺序固定。 */
+const REHYPE_PLUGINS = [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeCollapseWhitespace];
 
 /** DeepSeek 风格鲸鱼头像（SVG） */
 export function WhaleAvatar({ size = 28 }) {
@@ -49,27 +99,156 @@ function ThinkingBlock({ text, streaming }) {
   );
 }
 
-const mdComponents = {
-  code({ className, children, ...props }) {
-    const isBlock = /language-/.test(className || '');
-    if (isBlock) {
-      return (
-        <pre className="code-block">
-          <code className={className}>{children}</code>
-        </pre>
-      );
+/** 中文 LLM 输出预处理：
+ *  - 全角盒线分隔行（━━━ / ─── 等）→ markdown hr（---）；盒线+标题+盒线 → ### 标题
+ *  - 非代码块内连续 ≥2 空行折叠为 1、去掉首尾空行（配合 pre-wrap 防「空行太多」）
+ *  - 行尾去 \r；代码围栏（``` / ~~~）内部逐行原样保留，不折叠空行、不改写内容 */
+function preprocessMd(text) {
+  if (!text) return text;
+  const lines = text.split('\n');
+  const out = [];
+  let inCode = false;
+  let blankRun = 0; // 连续空行计数（流式围栏状态失同步时也把空行压到上限，避免巨大空档）
+  const lastIsBlank = () => out.length === 0 || out[out.length - 1].trim() === '';
+  for (const line of lines) {
+    const cleaned = line.replace(/\r$/, '');
+    const trimmed = cleaned.trim();
+    const fence = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fence) inCode = !inCode;
+    const isBlank = trimmed === '';
+    blankRun = isBlank ? blankRun + 1 : 0;
+    if (isBlank) {
+      if (!inCode) {
+        // 围栏外：连续空行折叠为 1
+        if (lastIsBlank()) continue;
+      } else if (blankRun > 2) {
+        // 围栏内：空行最多保留 2（真实代码 PEP8/JS 风格本就要求 ≤2 空行）
+        continue;
+      }
+      out.push(cleaned);
+      continue;
     }
-    return <code className="inline-code">{children}</code>;
-  },
-  a({ href, children }) {
+    if (!inCode) {
+      if (/^[─-╿―—\s]+$/.test(trimmed)) {
+        if (!lastIsBlank()) out.push('');
+        out.push('---');
+        out.push('');
+        continue;
+      }
+      const m = trimmed.match(/^[─-╿―—]+\s*(.+?)\s*[─-╿―—]+$/);
+      if (m) {
+        if (!lastIsBlank()) out.push('');
+        out.push('### ' + m[1]);
+        out.push('');
+        continue;
+      }
+    }
+    out.push(cleaned);
+  }
+  while (out.length && out[out.length - 1].trim() === '') out.pop();
+  return out.join('\n');
+}
+
+/** 渲染子代理内的单个 part（thinking / tool / text） */
+function renderSubagentPart(p, i, live) {
+  if (p.type === 'thinking') {
+    return <ThinkingBlock key={i} text={p.text} streaming={live} />;
+  }
+  if (p.type === 'tool') {
+    if (p.name === 'todo') {
+      return <TodoCard key={i} result={p.result} args={p.args} running={live && p.status === 'running'} />;
+    }
     return (
-      <a href={href} target="_blank" rel="noreferrer">{children}</a>
+      <ToolCallCard
+        key={i}
+        name={p.name}
+        status={p.status}
+        args={p.args}
+        result={p.result}
+        running={live && p.status === 'running'}
+      />
     );
-  },
-  table({ children }) {
-    return <div className="table-wrap"><table>{children}</table></div>;
-  },
-};
+  }
+  return (
+    <div key={i} className="msg-content markdown subagent-text">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={buildMdComponents(live)}
+      >
+        {preprocessMd(p.text || '')}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function SubagentCard({ part, live }) {
+  const [open, setOpen] = useState(false);
+  const innerParts = part.parts || [];
+  const task = part.task || '';
+  const truncated = task.length > 60 ? task.slice(0, 60) + '…' : task;
+  return (
+    <div className={`subagent-block ${part.status || ''}`}>
+      <button className="subagent-toggle" onClick={() => setOpen(!open)} title={open ? '收起' : '展开'}>
+        <span className="subagent-chevron">{open ? '▾' : '▸'}</span>
+        <span className="subagent-icon">🤝</span>
+        <span className="subagent-task">{truncated || '子代理任务'}</span>
+        <span className="subagent-meta">
+          {innerParts.length} 条记录
+          {part.status === 'done' ? ' · 完成' : (live ? ' · 执行中' : '')}
+        </span>
+      </button>
+      {open && (
+        <div className="subagent-content">
+          {innerParts.length === 0 ? (
+            <div className="subagent-empty">(无事件)</div>
+          ) : (
+            innerParts.map((p, i) => renderSubagentPart(p, i, live))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 构建 markdown 渲染组件。live=true（streaming 中）时 mermaid 先显示源码，
+ *  结束后才渲染成图（避免对不完整语法反复渲染/报错）。 */
+function buildMdComponents(live) {
+  return {
+    code({ className, children, node, ...props }) {
+      if (className === 'language-mermaid') {
+        const raw = String(
+          node && node.children && node.children[0] ? node.children[0].value : (children || '')
+        );
+        if (live) {
+          return (
+            <pre className="code-block">
+              <code className={className}>{raw}</code>
+            </pre>
+          );
+        }
+        return <MermaidDiagram code={raw} />;
+      }
+      const isBlock = /language-/.test(className || '');
+      if (isBlock) {
+        return (
+          <pre className="code-block">
+            <code className={className}>{children}</code>
+          </pre>
+        );
+      }
+      return <code className="inline-code">{children}</code>;
+    },
+    a({ href, children }) {
+      return (
+        <a href={href} target="_blank" rel="noreferrer">{children}</a>
+      );
+    },
+    table({ children }) {
+      return <div className="table-wrap"><table>{children}</table></div>;
+    },
+  };
+}
 
 export default function MessageItem({ msg, isLast, streaming }) {
   // 系统消息（命令结果等）
@@ -99,7 +278,11 @@ export default function MessageItem({ msg, isLast, streaming }) {
     return (
       <div className="msg-row tool">
         <div className="msg-body">
-          <ToolCallCard name={msg.toolName || 'tool'} status="done" result={msg.content} args="" />
+          {msg.toolName === 'todo' ? (
+            <TodoCard result={msg.content} args="" />
+          ) : (
+            <ToolCallCard name={msg.toolName || 'tool'} status="done" result={msg.content} args="" />
+          )}
         </div>
       </div>
     );
@@ -119,6 +302,9 @@ export default function MessageItem({ msg, isLast, streaming }) {
             return <ThinkingBlock key={i} text={p.text} streaming={live} />;
           }
           if (p.type === 'tool') {
+            if (p.name === 'todo') {
+              return <TodoCard key={i} result={p.result} args={p.args} running={live && p.status === 'running'} />;
+            }
             return (
               <ToolCallCard
                 key={i}
@@ -130,10 +316,17 @@ export default function MessageItem({ msg, isLast, streaming }) {
               />
             );
           }
+          if (p.type === 'subagent') {
+            return <SubagentCard key={i} part={p} live={live} />;
+          }
           return (
             <div key={i} className="msg-content markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                {p.text || ''}
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={REHYPE_PLUGINS}
+                components={buildMdComponents(live)}
+              >
+                {preprocessMd(p.text || '')}
               </ReactMarkdown>
               {live && <span className="cursor-blink">▍</span>}
             </div>

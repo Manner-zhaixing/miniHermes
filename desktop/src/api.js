@@ -125,7 +125,8 @@ export class BackendClient {
 
   // ── 业务便捷方法 ─────────────────────────────────────────
   loadSessions() { return this.get('/api/sessions'); }
-  newSessionHttp() { return this.post('/api/sessions'); }
+  newSessionHttp(body) { return this.post('/api/sessions', body ?? {}); }
+  getPersonas() { return this.get('/api/personas'); }
   getConfig() { return this.get('/api/config'); }
   getProviders() { return this.get('/api/providers'); }
   saveConfig(patch) { return this.post('/api/config', patch); }

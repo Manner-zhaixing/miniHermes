@@ -43,6 +43,7 @@ from minihermes.core.services.commands import (
 )
 from minihermes.core.services.context_ref import preprocess as expand_file_refs
 from minihermes.core.services.session_service import generate_session_id, list_sessions_ui
+from minihermes.core.personas import get_persona_registry, manifest_to_dict
 
 # Plan 模式（与内核 CLI 对齐）：只读规划 + 审批执行
 PLAN_TIMEOUT = 600
@@ -276,15 +277,28 @@ class Kernel:
         self.agent.switch_provider(self.provider)
 
     # ── 会话 ─────────────────────────────────────────────
-    def new_session(self) -> str:
+    def new_session(self, persona_id: str = "") -> str:
         sid = generate_session_id()
         model = cfg.get_model_config().get("name") or MODEL_NAME
         self.db.create_session(
             sid, model,
             model_config=json.dumps(cfg.get_model_config(), ensure_ascii=False),
             system_prompt=self.agent.system_prompt,
+            persona_id=persona_id or None,
         )
         return sid
+
+    def _apply_persona_for_session(self, sid: str):
+        """按会话懒应用专家（单 Agent 架构：每轮 send_message/run_plan 在 _turn_lock 内调用）。
+
+        幂等：会话绑定的 persona 与 agent 当前 persona 一致则跳过，天然串行安全。
+        切换只在 turn 开始前发生，绝不在流式中途 apply。
+        """
+        pid = self.db.get_persona(sid) or ""
+        if pid == self.agent.persona_id:
+            return
+        manifest = get_persona_registry().resolve(pid) if pid else None
+        self.agent.apply_persona(manifest)
 
     def resume_session(self, sid: str) -> list[dict]:
         return self.db.get_messages(sid)
@@ -301,6 +315,7 @@ class Kernel:
     # ── 对话 ─────────────────────────────────────────────
     def send_message(self, sid: str, content: str, thinking_effort: str | None = None) -> dict:
         with self._turn_lock:
+            self._apply_persona_for_session(sid)
             self.current_sid = sid
             history = self.db.get_messages_for_llm(sid)
             renderer = GuiRenderer(self._ws_send, sid)
@@ -322,6 +337,7 @@ class Kernel:
     # ── Plan 模式：只读规划 + 审批执行（统一走 core/services/plan.run_plan_flow）──
     def run_plan(self, sid: str, plan_description: str):
         with self._turn_lock:
+            self._apply_persona_for_session(sid)
             self.current_sid = sid
             renderer = GuiRenderer(self._ws_send, sid)
             self._ws_send({"type": "turn_start", "session_id": sid})
@@ -524,8 +540,13 @@ async def handle_ws_message(data: dict):
         registry.resolve(data.get("request_id", ""), data.get("answer"))
 
     elif msg_type == "new_session":
-        sid = k.new_session()
-        manager.send({"type": "session_created", "session_id": sid})
+        persona_id = data.get("persona_id") or ""
+        sid = k.new_session(persona_id=persona_id)
+        manager.send({
+            "type": "session_created",
+            "session_id": sid,
+            "persona_id": persona_id,
+        })
         manager.send({"type": "sessions", "sessions": k.sessions()})
 
     elif msg_type == "resume_session":
@@ -535,6 +556,7 @@ async def handle_ws_message(data: dict):
             "type": "session_messages",
             "session_id": sid,
             "messages": messages,
+            "persona_id": k.db.get_persona(sid) or "",
         })
 
     elif msg_type == "refresh_sessions":
@@ -585,10 +607,29 @@ def api_sessions():
     return {"sessions": get_kernel().sessions()}
 
 
+class NewSessionBody(BaseModel):
+    persona_id: str | None = None
+
+
 @app.post("/api/sessions")
-def api_new_session():
-    sid = get_kernel().new_session()
-    return {"session_id": sid, "sessions": get_kernel().sessions()}
+def api_new_session(body: NewSessionBody = None):
+    persona_id = (body.persona_id or "") if body else ""
+    sid = get_kernel().new_session(persona_id=persona_id)
+    return {
+        "session_id": sid,
+        "persona_id": persona_id,
+        "sessions": get_kernel().sessions(),
+    }
+
+
+@app.get("/api/personas")
+def api_personas():
+    """返回全部可用专家（含团队元数据），供右侧专家面板渲染。"""
+    try:
+        personas = [manifest_to_dict(m) for m in get_persona_registry().list()]
+        return {"personas": personas}
+    except Exception as e:
+        return {"personas": [], "error": str(e)}
 
 
 @app.get("/api/sessions/{sid}/messages")

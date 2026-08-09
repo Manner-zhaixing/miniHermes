@@ -32,10 +32,17 @@ function groupLabel(ts) {
 }
 
 export default function Sidebar({
-  sessions, activeSid, view, providerInfo, connected,
+  sessions, activeSid, view, providerInfo, connected, personas = [],
   onNewSession, onResume, onDelete, onView,
 }) {
   const [filter, setFilter] = useState('');
+
+  // persona_id → manifest 快速查表（会话项徽章用）
+  const personaById = useMemo(() => {
+    const m = {};
+    personas.forEach((p) => { m[p.id] = p; });
+    return m;
+  }, [personas]);
 
   const grouped = useMemo(() => {
     const kw = filter.trim().toLowerCase();
@@ -69,6 +76,13 @@ export default function Sidebar({
             <span className="nav-icon">{ICONS.chat}</span> 对话
           </button>
           <button
+            className={`nav-item ${view === 'experts' ? 'active' : ''}`}
+            onClick={() => onView('experts')}
+            title="选择专家：卡片墙 → 详情 → 应用（新建会话注入）"
+          >
+            <span className="nav-icon">🧠</span> 专家
+          </button>
+          <button
             className={`nav-item ${view === 'skills' ? 'active' : ''}`}
             onClick={() => onView('skills')}
           >
@@ -82,7 +96,7 @@ export default function Sidebar({
           </button>
         </nav>
 
-        <button className="new-chat-btn" onClick={onNewSession} title="新建会话">
+        <button className="new-chat-btn" onClick={onNewSession} title="新建会话（普通模式，无专家）">
           <span>+</span> 新会话
         </button>
       </div>
@@ -112,6 +126,11 @@ export default function Sidebar({
                   <div className="session-title">{s.title}</div>
                   <div className="session-meta">
                     {fmtTime(s.started_at)} · {s.message_count} 条
+                    {s.persona_id && personaById[s.persona_id] && (
+                      <span className="session-persona" title={`专家: ${personaById[s.persona_id].name}`}>
+                        {personaById[s.persona_id].icon || '🧠'} {personaById[s.persona_id].name}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <button

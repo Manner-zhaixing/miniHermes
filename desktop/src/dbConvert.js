@@ -12,9 +12,11 @@
 let _uid = 0;
 const uid = () => `m${Date.now()}_${_uid++}`;
 
-/** 从一条 DB assistant 消息构建片段（思考 → 工具 → 正文） */
-function buildParts(m, pendingTools) {
-  const parts = [];
+/** 从一条 DB assistant 消息构建片段（思考 → 工具 → 正文）。
+ *  owner 指定 push 到的目标数组（合并场景 = 上一条 assistant 的 parts），
+ *  以便 tool 结果关联时在同数组中定位 entry 并插入 subagent 卡片。 */
+function buildParts(m, pendingTools, owner) {
+  const parts = owner || [];
   const reasoning = m._reasoning || m.reasoning || '';
   if (reasoning) parts.push({ type: 'thinking', text: reasoning });
   (m.tool_calls || []).forEach((tc) => {
@@ -25,7 +27,7 @@ function buildParts(m, pendingTools) {
       args: tc.function?.arguments || '',
       result: '',
     };
-    pendingTools.push({ callId: tc.id || null, entry });
+    pendingTools.push({ callId: tc.id || null, entry, owner: parts });
     parts.push(entry);
   });
   const content = m.content || '';
@@ -35,7 +37,7 @@ function buildParts(m, pendingTools) {
 
 export function convertDbMessages(rawMessages) {
   const result = [];
-  // 等待结果填充的工具调用：{ callId, entry }，entry 即 tool 片段对象
+  // 等待结果填充的工具调用：{ callId, entry, owner }，owner 即 entry 所属 parts 数组
   const pendingTools = [];
 
   (rawMessages || []).forEach((m) => {
@@ -45,7 +47,7 @@ export function convertDbMessages(rawMessages) {
       const prev = result[result.length - 1];
       // 上一条渲染消息也是 assistant（中间隔的 tool 已合并进片段）→ 合并
       if (prev && prev.role === 'assistant') {
-        prev.parts.push(...buildParts(m, pendingTools));
+        prev.parts = buildParts(m, pendingTools, prev.parts);
         return;
       }
       result.push({
@@ -61,10 +63,23 @@ export function convertDbMessages(rawMessages) {
       let idx = pendingTools.findIndex((p) => p.callId && p.callId === m.tool_call_id);
       if (idx < 0) idx = pendingTools.findIndex((p) => p.entry.status === 'pending');
       if (idx >= 0) {
-        const { entry } = pendingTools[idx];
+        const { entry, owner } = pendingTools[idx];
         pendingTools.splice(idx, 1);
         entry.status = 'done';
         entry.result = m.content || '';
+        // subagent_trace 还原：在该工具片段后插入子代理折叠卡（trace 只进前端，不进 LLM）
+        if (m.subagent_trace) {
+          const at = owner.indexOf(entry);
+          if (at >= 0) {
+            owner.splice(at + 1, 0, {
+              type: 'subagent',
+              task: m.subagent_trace.task || '',
+              status: 'done',
+              parts: m.subagent_trace.parts || [],
+              open: false,
+            });
+          }
+        }
         return; // 合并进 assistant 的工具片段，不再单独渲染
       }
       // 无法关联（压缩/历史数据）：兜底渲染为独立工具卡片

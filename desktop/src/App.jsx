@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { initClient, getClient } from './api.js';
 import { convertDbMessages } from './dbConvert.js';
 import Sidebar from './components/Sidebar.jsx';
@@ -9,6 +9,7 @@ import ApprovalModal from './components/ApprovalModal.jsx';
 import ClarifyModal from './components/ClarifyModal.jsx';
 import PlanApprovalModal from './components/PlanApprovalModal.jsx';
 import FilesPanel from './components/FilesPanel.jsx';
+import ExpertsView from './components/ExpertsView.jsx';
 
 let _uid = 0;
 const uid = () => `m${Date.now()}_${_uid++}`;
@@ -54,6 +55,9 @@ export default function App() {
   const [compressing, setCompressing] = useState(false);
   const [mode, setMode] = useState('normal'); // 'normal' | 'plan'
   const [planApproval, setPlanApproval] = useState(null);
+  const [personas, setPersonas] = useState([]); // manifest 数组（GET /api/personas）
+  const personasByIdRef = useRef({});           // id -> manifest 快速查表
+  const pendingInitPromptRef = useRef('');      // 应用专家后待发送的 default_init_prompt
 
   const messagesRef = useRef(messages);
   const activeSidRef = useRef(activeSid);
@@ -111,6 +115,25 @@ export default function App() {
     return { ...msg, parts };
   }, []);
 
+  /** 对最后一条「运行中」的 subagent part 应用 fn（子代理事件累积） */
+  const patchLastSubagent = useCallback((fn) => {
+    const msgs = [...messagesRef.current];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== 'assistant') continue;
+      const parts = m.parts || [];
+      for (let j = parts.length - 1; j >= 0; j--) {
+        if (parts[j].type === 'subagent' && parts[j].status === 'running') {
+          const copy = [...parts];
+          copy[j] = fn(parts[j]);
+          msgs[i] = { ...m, parts: copy };
+          syncMessages(msgs);
+          return;
+        }
+      }
+    }
+  }, [syncMessages]);
+
   /** 等待会话创建（new_session 的应答） */
   const ensureSession = useCallback(() => {
     const sid = activeSidRef.current;
@@ -147,6 +170,22 @@ export default function App() {
           setSessionFiles((prev) => ({ ...prev, [sid]: [] }));
           sessionWaitersRef.current.forEach((w) => w(sid));
           sessionWaitersRef.current = [];
+          // 应用专家时若带 default_init_prompt：新建会话后自动作为首个消息发送
+          const initPrompt = pendingInitPromptRef.current;
+          pendingInitPromptRef.current = '';
+          if (initPrompt) {
+            // 与 sendMessage 一致：先推一条 user 消息进消息流，再发送（后端不广播用户消息）
+            pushMessage({ id: uid(), role: 'user', content: initPrompt, ts: Date.now() });
+            setTimeout(() => {
+              if (clientRef.current) {
+                clientRef.current.send({
+                  type: 'send_message',
+                  session_id: sid,
+                  content: initPrompt,
+                });
+              }
+            }, 0);
+          }
         });
 
         client.on('session_messages', (d) => {
@@ -211,6 +250,60 @@ export default function App() {
           });
         });
 
+        // ── 子代理事件（默认折叠，点击展开查看全部过程）──────────────────
+        client.on('subagent_start', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastAssistant((m) => appendPart(m, {
+            type: 'subagent', subagentId: d.subagent_id, task: d.task || '',
+            status: 'running', parts: [], open: false,
+          }));
+        });
+
+        client.on('subagent_thinking', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastSubagent((sa) => ({
+            ...sa,
+            parts: appendPart({ parts: sa.parts }, { type: 'thinking', text: d.text }).parts,
+          }));
+        });
+
+        client.on('subagent_delta', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastSubagent((sa) => ({
+            ...sa,
+            parts: appendPart({ parts: sa.parts }, { type: 'text', text: d.text }).parts,
+          }));
+        });
+
+        client.on('subagent_tool_start', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastSubagent((sa) => ({
+            ...sa,
+            parts: [...sa.parts, {
+              type: 'tool', name: d.tool_name, status: 'running', args: '', result: '',
+            }],
+          }));
+        });
+
+        client.on('subagent_tool_result', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastSubagent((sa) => {
+            const parts = [...sa.parts];
+            for (let i = parts.length - 1; i >= 0; i--) {
+              if (parts[i].type === 'tool' && parts[i].name === d.tool_name && parts[i].status === 'running') {
+                parts[i] = { ...parts[i], status: d.status === 'error' ? 'error' : 'done', result: d.result };
+                break;
+              }
+            }
+            return { ...sa, parts };
+          });
+        });
+
+        client.on('subagent_end', (d) => {
+          if (!isCurrentSession(d.session_id)) return;
+          patchLastSubagent((sa) => ({ ...sa, status: 'done' }));
+        });
+
         client.on('turn_end', (d) => {
           // 不检查 sid：上下文压缩可能产生新的 session_id，此时若不复位
           // streaming 状态会卡死（无法发送下一条消息）。turn_start 已有
@@ -259,16 +352,20 @@ export default function App() {
         client.on('approval_request', (d) => setApproval(d));
         client.on('plan_approval_request', (d) => setPlanApproval(d));
 
-        // 初始加载会话列表、配置与命令
-        const [sessRes, cfgRes, provRes, cmdRes, cwdRes] = await Promise.all([
+        // 初始加载会话列表、配置、命令、专家
+        const [sessRes, cfgRes, provRes, cmdRes, cwdRes, persRes] = await Promise.all([
           client.loadSessions(),
           client.getConfig().catch(() => null),
           client.getProviders().catch(() => null),
           client.getCommands().catch(() => ({ commands: [] })),
           client.getCwd().catch(() => null),
+          client.getPersonas().catch(() => ({ personas: [] })),
         ]);
         if (disposed) return;
         setSessions(sessRes.sessions || []);
+        setPersonas(persRes.personas || []);
+        personasByIdRef.current = {};
+        (persRes.personas || []).forEach((p) => { personasByIdRef.current[p.id] = p; });
         setProviderInfo(deriveProviderInfo(provRes));
         // 优先用后端实时 cwd（config 可能未写入 general.cwd）
         setCwd(cwdRes?.cwd || cfgRes?.general?.cwd || '');
@@ -360,6 +457,37 @@ export default function App() {
     if (streamingRef.current) clientRef.current?.send({ type: 'interrupt' });
     clientRef.current?.send({ type: 'new_session' });
   }, []);
+
+  /** 打开专家选择界面（主区域 view 切换；专家徽章点击也走这里） */
+  const openExperts = useCallback(() => setView('experts'), []);
+
+  /** 应用专家：立即新建会话并注入该专家（换专家 = 新建会话，原会话保留），随后切回对话 */
+  const applyExpert = useCallback((persona) => {
+    if (!clientRef.current) {
+      setError('内核未连接，无法应用专家');
+      return;
+    }
+    if (streamingRef.current) clientRef.current.send({ type: 'interrupt' });
+    // 应用专家后自动发送 default_init_prompt（若有）
+    pendingInitPromptRef.current = persona && persona.default_init_prompt
+      ? persona.default_init_prompt : '';
+    clientRef.current.send({
+      type: 'new_session',
+      persona_id: persona ? persona.id : '',
+    });
+    setView('chat');
+  }, []);
+
+  /** 当前会话绑定的专家（从 sessions + personas 派生，单一事实源） */
+  const activePersonaId = useMemo(() => {
+    if (!activeSid) return '';
+    const s = sessions.find((x) => x.id === activeSid);
+    return (s && s.persona_id) || '';
+  }, [activeSid, sessions]);
+  const activePersona = useMemo(
+    () => (activePersonaId ? (personasByIdRef.current[activePersonaId] || null) : null),
+    [activePersonaId, personas],
+  );
 
   const resumeSession = useCallback((sid) => {
     // 切换会话前中断正在进行的生成
@@ -474,6 +602,7 @@ export default function App() {
         view={view}
         providerInfo={providerInfo}
         connected={connected}
+        personas={personas}
         onNewSession={newSession}
         onResume={resumeSession}
         onDelete={deleteSession}
@@ -508,6 +637,8 @@ export default function App() {
               mode={mode}
               onModeChange={setMode}
               onModelChange={changeModel}
+              activePersona={activePersona}
+              onOpenExperts={openExperts}
             />
             {filesPanelOpen && (
               <FilesPanel
@@ -516,6 +647,13 @@ export default function App() {
               />
             )}
           </div>
+        )}
+        {view === 'experts' && (
+          <ExpertsView
+            personas={personas}
+            activePersonaId={activePersonaId}
+            onApply={applyExpert}
+          />
         )}
         {view === 'settings' && (
           <SettingsView clientRef={clientRef} setError={setError} onConfigSaved={refreshProviderInfo} />

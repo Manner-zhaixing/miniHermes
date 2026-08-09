@@ -49,5 +49,30 @@ class GuiRenderer:
             "session_id": self._sid,
         })
 
+    def on_child_event(self, child_id: str, task: str, event_type: str, payload: dict) -> None:
+        """子代理事件（ChildRenderer 转发）→ subagent_* WS 事件。
+
+        前端默认折叠显示，点击展开查看全部过程。
+        """
+        base = {
+            "type": f"subagent_{event_type}",
+            "session_id": self._sid,
+            "subagent_id": child_id,
+            "task": task,
+        }
+        if event_type in ("thinking", "delta"):
+            self._send({**base, "text": payload.get("text", "")})
+        elif event_type == "tool_start":
+            self._send({**base, "tool_name": payload.get("tool_name", "")})
+        elif event_type == "tool_result":
+            self._send({
+                **base,
+                "tool_name": payload.get("tool_name", ""),
+                "result": payload.get("result", ""),
+                "status": _detect_status(payload.get("result", "")),
+            })
+        else:  # start / end
+            self._send(base)
+
     def finalize(self):
         pass
