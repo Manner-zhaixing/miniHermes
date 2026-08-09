@@ -351,6 +351,8 @@ All old APIs preserved: `discover_skills()` returns same shape, `load_skill()` r
 
 ## Key Conventions
 
+- **文档同步（硬性）**：每次修改代码后，都要及时更新 `CLAUDE.md` 和 `docs/` 目录下的对应文档（`01-call-chain.md`~`10-persona-system.md`、`整体架构.md`、`skill-module-redesign.md` 等）——同步目录结构、消息流、核心层职责、新增功能与配置项，确保文档与代码保持一致。
+- **README 同步（硬性）**：每次修改代码后，都要及时更新 `README.md`——同步特性列表、架构描述、使用说明等用户可见内容，凡影响对外功能/配置/命令/双端形态的都需反映到 README。
 - All tools follow OpenAI function calling schema, registered via the `@register` decorator. New tool modules must be imported in `tools/__init__.py` to trigger registration.
 - Tool execution retry is always enabled for `bash`, `web_extract`, `web_search` — up to 2 retries on timeout/transient errors. Bash timeout doubles on each retry (max 120s).
 - All tool outputs go through `truncate_output()` (50K char limit, head 40% + tail 60%).
