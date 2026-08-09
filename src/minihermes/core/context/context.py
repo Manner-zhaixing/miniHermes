@@ -101,6 +101,12 @@ class ConversationContext:
         self._last_prompt_tokens = 0
         self._last_msg_count = 0
 
+    def update_overhead(self, system_prompt: str, tools_schema_json: str):
+        """切换专家/厂商后重算固定 token 开销（system prompt + 工具 schema 都变了）。"""
+        self._system_tokens = len(system_prompt) // 4
+        self._tools_schema_tokens = len(tools_schema_json) // 4
+        self._fixed_overhead = self._system_tokens + self._tools_schema_tokens
+
     @property
     def last_prompt_tokens(self) -> int:
         """上次 LLM 调用的真实 prompt token 数（用于状态栏百分比）。"""

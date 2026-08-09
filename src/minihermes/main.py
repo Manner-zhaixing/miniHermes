@@ -61,6 +61,12 @@ _install_newline_key_sequences()
 
 def main():
     """启动 MiniHermes 交互式 CLI。"""
+    import argparse
+    parser = argparse.ArgumentParser(description="MiniHermes AI assistant CLI")
+    parser.add_argument("--persona", metavar="ID", default=None,
+                        help="启动即注入专家（persona）id，如 doc-writer / dev-team")
+    args = parser.parse_args()
+
     db = SessionDB()
 
     try:
@@ -94,6 +100,16 @@ def main():
 
     state.agent = agent
 
+    # 可选：--persona 启动注入专家（缺省 = 无专家，行为与现状一致）
+    if args.persona:
+        from minihermes.core.personas import get_persona_registry
+        manifest = get_persona_registry().resolve(args.persona)
+        if manifest is None:
+            print_error(f"[unknown persona: {args.persona}]")
+            sys.exit(1)
+        agent.apply_persona(manifest)
+        state.current_persona_id = manifest.id
+
     # 创建 Session
     session_id = generate_session_id()
     state.session_id = session_id
@@ -101,6 +117,7 @@ def main():
         session_id, model_name,
         model_config=json.dumps(cfg.get_model_config(), ensure_ascii=False),
         system_prompt=agent.system_prompt,
+        persona_id=state.current_persona_id or None,
     )
 
     # 打印欢迎信息

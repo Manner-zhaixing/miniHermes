@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     output_tokens INTEGER DEFAULT 0,
     reasoning_tokens INTEGER DEFAULT 0,
     title TEXT,
-    parent_session_id TEXT
+    parent_session_id TEXT,
+    persona_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -82,6 +83,12 @@ class SessionDB:
         cols = [r[1] for r in self._conn.execute("PRAGMA table_info(sessions)").fetchall()]
         if "parent_session_id" not in cols:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT")
+        if "persona_id" not in cols:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN persona_id TEXT")
+        # messages 表：subagent_trace（子代理过程 JSON，仅供前端展示，不进 LLM 历史）
+        msg_cols = [r[1] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()]
+        if "subagent_trace" not in msg_cols:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN subagent_trace TEXT")
 
     def create_session(
         self,
@@ -89,11 +96,12 @@ class SessionDB:
         model: str,
         model_config: str = None,
         system_prompt: str = None,
+        persona_id: str = None,
     ) -> None:
         self._conn.execute(
-            """INSERT OR IGNORE INTO sessions (id, source, model, model_config, system_prompt, started_at)
-               VALUES (?, 'cli', ?, ?, ?, ?)""",
-            (session_id, model, model_config, system_prompt, time.time()),
+            """INSERT OR IGNORE INTO sessions (id, source, model, model_config, system_prompt, started_at, persona_id)
+               VALUES (?, 'cli', ?, ?, ?, ?, ?)""",
+            (session_id, model, model_config, system_prompt, time.time(), persona_id),
         )
 
     def end_session(self, session_id: str, end_reason: str = "user_exit") -> None:
@@ -109,15 +117,36 @@ class SessionDB:
         model: str,
         model_config: str = None,
         system_prompt: str = None,
+        persona_id: str = None,
     ) -> None:
-        """压缩后创建子 session，同时结束 parent session。"""
+        """压缩后创建子 session，同时结束 parent session。
+
+        默认继承 parent 的 persona_id（压缩不丢专家）；显式传入可覆盖。
+        """
         self.end_session(parent_id, end_reason="compression")
+        if persona_id is None:
+            persona_id = self.get_persona(parent_id)
         self._conn.execute(
             """INSERT INTO sessions (id, source, model, model_config, system_prompt,
-               started_at, parent_session_id)
-               VALUES (?, 'cli', ?, ?, ?, ?, ?)""",
-            (child_id, model, model_config, system_prompt, time.time(), parent_id),
+               started_at, parent_session_id, persona_id)
+               VALUES (?, 'cli', ?, ?, ?, ?, ?, ?)""",
+            (child_id, model, model_config, system_prompt, time.time(), parent_id, persona_id),
         )
+
+    def set_persona(self, session_id: str, persona_id: str | None) -> None:
+        """绑定/解绑会话专家（persona_id=None 解绑恢复默认）。"""
+        self._conn.execute(
+            "UPDATE sessions SET persona_id = ? WHERE id = ?",
+            (persona_id, session_id),
+        )
+
+    def get_persona(self, session_id: str) -> str | None:
+        """读取会话绑定的专家 id（无则 None）。"""
+        cur = self._conn.execute(
+            "SELECT persona_id FROM sessions WHERE id = ?", (session_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
 
     def resolve_resume_session_id(self, session_id: str) -> str:
         """沿压缩链路走到最新的有消息的 session。"""
@@ -155,13 +184,14 @@ class SessionDB:
         token_count: int = None,
         finish_reason: str = None,
         msg_type: str = "normal",
+        subagent_trace: str = None,
     ) -> None:
         tc_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
         self._conn.execute(
             """INSERT INTO messages
-               (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning, timestamp, token_count, finish_reason, msg_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, role, content, tc_json, tool_call_id, tool_name, reasoning, time.time(), token_count, finish_reason, msg_type),
+               (session_id, role, content, tool_calls, tool_call_id, tool_name, reasoning, timestamp, token_count, finish_reason, msg_type, subagent_trace)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, role, content, tc_json, tool_call_id, tool_name, reasoning, time.time(), token_count, finish_reason, msg_type, subagent_trace),
         )
         self._conn.execute(
             "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?",
@@ -216,13 +246,13 @@ class SessionDB:
 
     def get_messages(self, session_id: str) -> list[dict]:
         cur = self._conn.execute(
-            """SELECT role, content, tool_calls, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type
+            """SELECT role, content, tool_calls, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type, subagent_trace
                FROM messages WHERE session_id = ? ORDER BY id""",
             (session_id,),
         )
         messages = []
         for row in cur.fetchall():
-            role, content, tc_json, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type = row
+            role, content, tc_json, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type, subagent_trace = row
             msg: dict = {"role": role}
             if content is not None:
                 msg["content"] = content
@@ -240,12 +270,19 @@ class SessionDB:
                 msg["finish_reason"] = finish_reason
             if msg_type != "normal":
                 msg["_msg_type"] = msg_type
+            if subagent_trace:
+                msg["subagent_trace"] = json.loads(subagent_trace)
             messages.append(msg)
         return messages
 
     def get_messages_for_llm(self, session_id: str) -> list[dict]:
-        """加载用于 LLM 的消息：反向遍历，遇到最近的 summary 停止。"""
+        """加载用于 LLM 的消息：反向遍历，遇到最近的 summary 停止。
+
+        注意：subagent_trace 只给前端展示，绝不进入 LLM 历史——返回前逐条剥离。
+        """
         all_msgs = self.get_messages(session_id)
+        for msg in all_msgs:
+            msg.pop("subagent_trace", None)
 
         summary_idx = None
         for i in range(len(all_msgs) - 1, -1, -1):
@@ -264,7 +301,7 @@ class SessionDB:
         cur = self._conn.execute(
             """SELECT id, source, model, model_config, system_prompt, started_at, ended_at,
                       end_reason, message_count, tool_call_count, input_tokens, output_tokens,
-                      reasoning_tokens, title, parent_session_id
+                      reasoning_tokens, title, parent_session_id, persona_id
                FROM sessions ORDER BY started_at DESC LIMIT ?""",
             (limit,),
         )
@@ -285,6 +322,7 @@ class SessionDB:
                 "reasoning_tokens": row[12],
                 "title": row[13],
                 "parent_session_id": row[14],
+                "persona_id": row[15],
             }
             for row in cur.fetchall()
         ]

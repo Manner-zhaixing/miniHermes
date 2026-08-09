@@ -37,6 +37,13 @@ _SCHEMA = {
                         "Optional but strongly recommended for non-trivial tasks."
                     ),
                 },
+                "persona_id": {
+                    "type": "string",
+                    "description": (
+                        "Team 会话专用：委派给当前专家团中的某位团员（见系统提示中的 Team Roster）。"
+                        "省略 = 通用子代理（默认行为）。非团队会话传该参数会得到错误提示。"
+                    ),
+                },
             },
             "required": ["task"],
         },
@@ -45,6 +52,6 @@ _SCHEMA = {
 
 
 @register(_SCHEMA)
-def delegate_task(task: str, context: str = "") -> str:
+def delegate_task(task: str, context: str = "", persona_id: str = "") -> str:
     """Placeholder — execution intercepted by Agent._execute_tool()."""
     return "Error: delegate_task must be executed within an Agent context."

@@ -11,6 +11,7 @@ Agent 核心层：对话循环。
 
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -23,6 +24,8 @@ from minihermes.core.rendering import Renderer
 from minihermes.core.session import SessionDB
 from minihermes.core.context.compressor import ContextCompressor
 from minihermes.core.context import ConversationContext
+from minihermes.core.personas import build_team_roster
+from minihermes.core.personas.manifest import PersonaManifest
 
 
 # 最大迭代次数写死（不再读 config.agent.max_iterations）：
@@ -51,6 +54,7 @@ class Agent:
         tool_filter: dict | None = None,
         system_prompt_override: str | None = None,
         max_iterations_override: int | None = None,
+        persona: Optional[PersonaManifest] = None,
     ):
         self.provider = provider
         self.db = db
@@ -59,11 +63,17 @@ class Agent:
         self.auto_approve = auto_approve
         self._tool_filter = tool_filter or {}
 
+        # 会话级专家（None = 无专家，行为与现状一致）
+        self.persona: Optional[PersonaManifest] = persona
+        self.persona_id = persona.id if persona else ""
+        # team 主理人花名册（仅 team 型非空）
+        self.team_roster = build_team_roster(persona) if (persona and persona.is_team()) else None
+
         # system prompt：支持外部覆盖（子 Agent 使用精简 prompt）
         if system_prompt_override is not None:
             self.system_prompt = system_prompt_override
         else:
-            self.reload_system_prompt()
+            self.reload_system_prompt(persona=self.persona)
 
         # 设置最大迭代次数（写死默认；override 供子 Agent/plan/进化覆盖）
         self._max_iterations = max_iterations_override or DEFAULT_MAX_ITERATIONS
@@ -82,11 +92,21 @@ class Agent:
         )
         # 中断请求
         self._interrupt_requested = False
+        # delegate_task 的子代理 trace（keyed by tool_call id，_process_tool_call 落盘后弹出）
+        self._subagent_traces: dict[str, dict] = {}
 
     def _get_tool_schemas(self) -> list[dict]:
-        """返回经过过滤的工具 schema 列表。"""
+        """返回经过过滤的工具 schema 列表。
+
+        _tool_filter（Agent 级）与 persona 白名单（会话级）并存时取交集；
+        persona 无白名单（tools 为空）→ 只按 _tool_filter 过滤（等效 include=None 全开）。
+        """
+        inc = set(self._tool_filter.get("include")) if self._tool_filter.get("include") else None
+        if self.persona and self.persona.tools:
+            wl = set(self.persona.tools)
+            inc = (inc & wl) if inc is not None else wl
         return tool_registry.get_schemas(
-            include=self._tool_filter.get("include"),
+            include=list(inc) if inc else None,
             exclude=self._tool_filter.get("exclude"),
         )
 
@@ -115,20 +135,41 @@ class Agent:
         self._ctx.reset_token_tracking()
 
     def reload_system_prompt(self, memory_store=None,
-                             tool_names=None, cwd=None):
+                             tool_names=None, cwd=None,
+                             persona=None, team_roster=None):
         """重建系统提示并重新计算 token 开销。
 
         /init 创建 minihermes.md 后调用，使新的上下文文件立即生效。
+        persona/team_roster 显式传入时用传入值，否则沿用当前 self.persona/self.team_roster。
         """
         memory_store = memory_store or get_memory_store()
         tool_names = tool_names or tool_registry.get_tool_manager().get_names()
         cwd = cwd or os.getcwd()
+        p = persona if persona is not None else self.persona
+        roster = team_roster if team_roster is not None else self.team_roster
         self.system_prompt = build_system_prompt(
             model_name=self.provider.model,
             memory_store=memory_store,
             cwd=cwd,
             tool_names=tool_names,
+            persona=p,
+            team_roster=roster,
         )
+        # 换 persona/工具白名单后重算 token 固定开销（_ctx 在 __init__ 后半段创建）
+        if hasattr(self, "_ctx"):
+            self._ctx.update_overhead(self.system_prompt, json.dumps(self._get_tool_schemas()))
+
+    def apply_persona(self, persona: Optional[PersonaManifest]):
+        """会话级切换专家：换身份 + 工具集 + 花名册，下一轮生效（不打断当前轮）。
+
+        persona=None 退出专家，恢复默认行为。team 型同时更新主理人花名册。
+        调用方负责把 persona_id 持久化到会话（db.set_persona）。
+        """
+        self.persona = persona
+        self.persona_id = persona.id if persona else ""
+        self.team_roster = build_team_roster(persona) if (persona and persona.is_team()) else None
+        self.reload_system_prompt(persona=persona)
+        self._ctx.reset_token_tracking()
 
     def switch_provider(self, provider: Provider):
         """运行时切换厂商/模型：换 provider、重建压缩器、刷新系统提示。
@@ -142,7 +183,8 @@ class Agent:
         self.reload_system_prompt()                      # 系统提示里的 Model 标签刷新
         self._ctx.reset_token_tracking()
 
-    def _execute_tool(self, tool_name: str, tool_call: dict, args: dict) -> str:
+    def _execute_tool(self, tool_name: str, tool_call: dict, args: dict,
+                      renderer=None) -> str:
         """
         执行单个工具调用。
 
@@ -150,6 +192,7 @@ class Agent:
             tool_name: 工具名，例如 "clarify"。
             tool_call: OpenAI tool_call 原始字典。
             args: 已解析的工具参数，例如 {"question": "..."}。
+            renderer: 当前会话渲染器（用于子代理事件透传；None 时子代理走默认终端打印）。
 
         Returns:
             工具返回的字符串结果。
@@ -166,16 +209,76 @@ class Agent:
         if tool_name == "delegate_task":
             from minihermes.core.agent.delegate import run_delegate, DelegationRequest
 
+            # 团队会话：persona_id → 团员 manifest（未知团员返回错误而非静默降级）
+            member = None
+            persona_id = args.get("persona_id", "")
+            if persona_id:
+                member = self._resolve_team_member(persona_id)
+                if member is None:
+                    return self._team_member_error(persona_id)
+
             request = DelegationRequest(
                 task=args.get("task", ""),
                 context=args.get("context", ""),
             )
-            result = run_delegate(request, self.provider)
+
+            # 子代理过程透传：构造 ChildRenderer 包一层，把事件转发给父渲染器
+            # 的 on_child_event 钩子（桌面 → subagent_* WS 事件；CLI → 终端打印），
+            # 同时累积 parts 供 subagent_trace 持久化。start/end 边界由这里显式触发。
+            child_renderer = None
+            child_id = ""
+            if renderer is not None:
+                from minihermes.core.rendering import ChildRenderer
+
+                child_id = uuid.uuid4().hex[:8]
+                child_renderer = ChildRenderer(renderer, child_id=child_id, task=args.get("task", ""))
+                start_hook = getattr(renderer, "on_child_event", None)
+                if start_hook is not None:
+                    start_hook(child_id, args.get("task", ""), "start", {})
+
+            try:
+                result = run_delegate(request, self.provider,
+                                      renderer=child_renderer, persona=member)
+            finally:
+                if child_renderer is not None:
+                    end_hook = getattr(renderer, "on_child_event", None)
+                    if end_hook is not None:
+                        end_hook(child_id, args.get("task", ""), "end", {})
+                    # 收集 trace（即使失败也保留已发生的过程）
+                    self._subagent_traces[tool_call["id"]] = {
+                        "task": args.get("task", ""),
+                        "parts": child_renderer.parts,
+                    }
             if result.success:
                 return result.response
             return f"[Delegation failed: {result.error}]"
 
         return tool_registry.execute(tool_call)
+
+    def _resolve_team_member(self, persona_id: str):
+        """把 delegate_task 的 persona_id 解析为当前专家团团员（仅 team 主理人会话有效）。
+
+        非团队会话或团员不存在时返回 None（调用方给出明确错误）。
+        """
+        if not (self.persona and self.persona.is_team()):
+            return None
+        for mem in self.persona.resolved_members:
+            if mem.id == persona_id:
+                return mem
+        return None
+
+    def _team_member_error(self, persona_id: str) -> str:
+        """未知团员/非团队会话的 delegate 错误信息（含可用团员列表）。"""
+        if self.persona and self.persona.is_team():
+            available = ", ".join(m.id for m in self.persona.resolved_members) or "（无）"
+            return (
+                f"Error: 专家团中没有成员 {persona_id!r}。"
+                f"可用团员: {available}。请把 persona_id 换成上面的某个 id，或省略以使用通用子代理。"
+            )
+        return (
+            "Error: 当前会话不是专家团（team）会话，无法按 persona_id 委派给团员。"
+            "请省略 persona_id 使用通用子代理，或在团队专家（如 dev-team）会话中调用。"
+        )
 
     def _process_tool_call(self, tc: dict, result: StreamResult,
                            messages: list[dict], working_history: list[dict],
@@ -213,7 +316,7 @@ class Agent:
         if blocked_msg is not None:
             tool_result = blocked_msg
         else:
-            tool_result = self._execute_tool(tool_name, tc, args)
+            tool_result = self._execute_tool(tool_name, tc, args, renderer=renderer)
 
         if renderer:
             renderer.on_tool_result(tool_name, tool_result)
@@ -234,10 +337,12 @@ class Agent:
         working_history.append(result_msg)
 
         if self.db and session_id:
+            trace = self._subagent_traces.pop(tc["id"], None)
             self.db.append_message(
                 session_id, role="tool", content=tool_result,
                 tool_call_id=tc["id"], tool_name=tool_name,
                 token_count=len(tool_result) // 4,
+                subagent_trace=json.dumps(trace, ensure_ascii=False) if trace else None,
             )
 
     def _handle_json_error(self, tc: dict, tool_name: str, raw_args: str,

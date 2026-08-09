@@ -46,3 +46,7 @@ packages = ["src/minihermes"]
 [tool.uv]
 managed = true
 default-groups = ["desktop"]
+
+[tool.pytest.ini_options]
+# 只收集 tests/（desktop/backend/*_test.py 是 WS 集成脚本，走 sys.argv 端口，非 pytest 用例）
+testpaths = ["tests"]

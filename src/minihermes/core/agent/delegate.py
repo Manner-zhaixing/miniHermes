@@ -13,10 +13,13 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from minihermes.core.provider import Provider
 from minihermes.core.rendering import Renderer
+
+if TYPE_CHECKING:
+    from minihermes.core.personas.manifest import PersonaManifest
 
 
 # ── 数据结构 ─────────────────────────────────────────────────────────────────
@@ -68,6 +71,7 @@ def run_delegate(
     request: DelegationRequest,
     parent_provider: Provider,
     renderer: Optional[Renderer] = None,
+    persona: Optional["PersonaManifest"] = None,
 ) -> DelegationResult:
     """同步执行一个委派任务。
 
@@ -77,6 +81,8 @@ def run_delegate(
     Args:
         request: 委派请求描述
         parent_provider: 父 Agent 的 Provider 实例（复用）
+        persona: 团员 manifest（团队会话 delegate_task 携 persona_id 时传入）。
+            None = 通用子代理（默认 _CHILD_SYSTEM_PROMPT）。
 
     Returns:
         DelegationResult 包含成功状态和响应文本
@@ -90,21 +96,35 @@ def run_delegate(
     if request.tools_exclude:
         exclude |= request.tools_exclude
 
-    # 子 Agent 迭代预算（硬编码，防止失控）
-    max_iter = request.max_iterations or 50
-
-    tool_filter = {"exclude": exclude}
-
-    # 创建子 Agent（不持久化、不交互）
-    child_agent = Agent(
-        provider=parent_provider,
-        db=None,
-        clarify_callback=None,
-        auto_approve=True,
-        tool_filter=tool_filter,
-        system_prompt_override=_CHILD_SYSTEM_PROMPT,
-        max_iterations_override=max_iter,
-    )
+    if persona:
+        # 团队分支：团员正文 + 团队协作补充为 system prompt，工具走团员白名单
+        from minihermes.core.personas import build_member_prompt
+        system_override = build_member_prompt(persona)
+        max_iter = persona.max_team_iterations
+        tool_filter = {"exclude": exclude}   # include 由 Agent 按 persona.tools 交集施加
+        child_agent = Agent(
+            provider=parent_provider,
+            db=None,
+            clarify_callback=None,
+            auto_approve=True,
+            tool_filter=tool_filter,
+            system_prompt_override=system_override,
+            max_iterations_override=max_iter,
+            persona=persona,
+        )
+    else:
+        # 通用分支：默认精简 prompt + 全部工具（仅 block delegate/clarify）
+        max_iter = request.max_iterations or 50
+        tool_filter = {"exclude": exclude}
+        child_agent = Agent(
+            provider=parent_provider,
+            db=None,
+            clarify_callback=None,
+            auto_approve=True,
+            tool_filter=tool_filter,
+            system_prompt_override=_CHILD_SYSTEM_PROMPT,
+            max_iterations_override=max_iter,
+        )
 
     # 构建用户消息
     if request.context:

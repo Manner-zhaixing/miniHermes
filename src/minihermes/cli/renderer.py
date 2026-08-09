@@ -86,6 +86,7 @@ class StreamRenderer:
         self._thinking = False
         self._thinking_started = False
         self._response_started = False
+        self._subagents: dict[str, SubagentRenderer] = {}  # child_id → 子代理打印器
 
     def reset(self):
         self._buf = ""
@@ -146,6 +147,26 @@ class StreamRenderer:
             preview += "..."
         suffix = _detect_failure_suffix(result)
         _cprint(f"{_INDENT}{_AMBER}┊ ✓ {tool_name}:{_RST} {_DIM}{preview}{_RST}{suffix}")
+
+    # ── 子代理事件（ChildRenderer 转发，复用 SubagentRenderer 打印防回归）────
+
+    def on_child_event(self, child_id: str, task: str, event_type: str, payload: dict) -> None:
+        sr = self._subagents.get(child_id)
+        if sr is None:
+            sr = SubagentRenderer(task_preview=task)
+            self._subagents[child_id] = sr
+        if event_type == "start":
+            sr._ensure_header()
+        elif event_type == "end":
+            sr.finalize()
+            self._subagents.pop(child_id, None)
+        elif event_type == "thinking":
+            sr.on_thinking(payload.get("text", ""))
+        elif event_type == "tool_start":
+            sr.on_tool_start(payload.get("tool_name", ""))
+        elif event_type == "tool_result":
+            sr.on_tool_result(payload.get("tool_name", ""), payload.get("result", ""))
+        # delta: SubagentRenderer 不打印子代理文本流，跳过（与原有 CLI 行为一致）
 
     # ── 流结束 ────────────────────────────────────────────────────────────
 

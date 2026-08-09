@@ -19,9 +19,12 @@ import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from minihermes.core.config import MINIHERMES_HOME
+
+if TYPE_CHECKING:
+    from minihermes.core.personas.manifest import PersonaManifest
 
 # ── Layer 1: 默认身份（SOUL.md 不存在时的兜底）────────────────────────────────
 
@@ -66,7 +69,8 @@ TODO_GUIDANCE = (
     "Create the todo list BEFORE starting work, not after. "
     "Keep exactly ONE item in_progress at a time. "
     "Mark items completed immediately when done — do not batch completions. "
-    "If a task turns out to be unnecessary, remove it from the list entirely.\n\n"
+    "If a task turns out to be unnecessary, remove it from the list entirely. "
+    "After each step completes, update its todo status immediately before moving on — never defer todo updates.\n\n"
     "Do NOT use todo for single-step tasks or trivial operations."
 )
 
@@ -112,10 +116,27 @@ SKILL_MANAGE_GUIDANCE = (
 # 工具引导映射（模块级常量，避免每次 build_system_prompt 重建）
 _TOOL_GUIDANCE: dict[str, str] = {}
 
+# ── 输出样式引导（WorkBuddy 风格结构化 Markdown）────────────────────────────
+# 全局生效（CLI 与桌面共用）；CLI 终端会把 markdown 拍平为纯文本，桌面端完整渲染。
+
+OUTPUT_FORMAT_GUIDANCE = """\
+Output style (structured Markdown):
+- Use short headings, bullet lists, numbered steps, tables, bold for key terms, and fenced
+  code blocks for code/commands/config.
+- When an answer involves a flow, workflow, architecture, state transition, or decision tree,
+  prefer HTML for diagrams — draw a small diagram in raw HTML (not Mermaid): inline-styled
+  <div> boxes with borders/backgrounds connected by → arrows, using inline CSS. Keep it
+  valid, concise, and self-contained — no scripts, no remote images, labels in the same
+  language as the conversation. In prose, escape literal < as &lt;.
+- Summarize tool results into the structure above instead of dumping raw JSON.
+- Avoid excessive blank lines; keep paragraphs and lists tight.\
+"""
+
 # ── Layer 12: 平台提示（固定 CLI）────────────────────────────────────────────
 
 CLI_PLATFORM_HINT = """\
-You are a CLI AI Agent. Try not to use markdown but simple text renderable inside a terminal.
+You are a CLI AI Agent. Markdown you emit is flattened to plain text in the terminal, so prefer
+concise, scannable structure over heavy formatting.
 File delivery: there is no attachment channel — the user reads your response directly in their
 terminal. When referring to a file you created or changed, just state its absolute path in plain
 text; the user can open it from there.\
@@ -494,12 +515,23 @@ def _skill_should_show(
 def _get_skills_prompt_cached(
     available_tools: Optional[set] = None,
     available_toolsets: Optional[set] = None,
+    only_names: Optional[set] = None,
 ) -> str:
     """Get the skills index prompt text, using two-layer cache when possible.
 
     Strategy: in-process LRU → disk snapshot (mtime validated) → filesystem scan.
     Filters skills based on conditional activation rules.
+
+    Args:
+        only_names: 非空时只展示这些技能（专家捆绑技能），绕过两层缓存直接构建
+                    （缓存 key 不含该维度，避免污染 LRU/disk snapshot）。
     """
+    if only_names:
+        # 专家捆绑技能：量少，旁路缓存直接构建
+        return _build_filtered_skills_index(
+            available_tools or None, available_toolsets or None, only_names=only_names
+        )
+
     from minihermes.core.skills.manager import _get_skills_dirs
 
     skills_dirs = tuple(str(d) for d in _get_skills_dirs())
@@ -548,11 +580,16 @@ def _get_skills_prompt_cached(
 def _build_filtered_skills_index(
     available_tools: Optional[set] = None,
     available_toolsets: Optional[set] = None,
+    only_names: Optional[set] = None,
 ) -> str:
-    """Build skills index, filtering out skills that don't match conditional activation rules."""
+    """Build skills index, filtering out skills that don't match conditional activation rules.
+
+    Args:
+        only_names: 非空时只保留指定 name 的技能（专家捆绑技能索引，渐进披露）。
+    """
     from minihermes.core.skills.manager import discover_skills, parse_frontmatter, extract_skill_conditions, _get_skills_dirs
 
-    if not available_tools and not available_toolsets:
+    if not available_tools and not available_toolsets and not only_names:
         from minihermes.core.skills import build_skills_index
         return build_skills_index()
 
@@ -560,6 +597,8 @@ def _build_filtered_skills_index(
     raw_skills = discover_skills()
     filtered = []
     for s in raw_skills:
+        if only_names and s["name"] not in only_names:
+            continue
         # Read frontmatter to get conditions
         try:
             content = s["path"].read_text(encoding="utf-8")
@@ -628,6 +667,8 @@ def build_system_prompt(
     memory_store=None,
     cwd: Optional[str] = None,
     tool_names: Optional[set] = None,
+    persona: Optional["PersonaManifest"] = None,
+    team_roster: Optional[str] = None,
 ) -> str:
     """
     组装完整系统提示词（每 session 调用一次）。
@@ -637,13 +678,25 @@ def build_system_prompt(
         memory_store: MemoryStore 实例，提供冻结快照；为 None 时跳过记忆层
         cwd:          工作目录，用于上下文文件发现；为 None 时用 os.getcwd()
         tool_names:   已注册工具名集合，用于条件注入工具行为引导
+        persona:      专家 manifest；为 None 时行为与现状逐字节一致（向后兼容）
+        team_roster:  团队花名册文本（仅 team 型专家主理人注入）
     """
     _tools = tool_names or set()
+    # 专家硬白名单：声明 tools 则只对白名单 ∩ 已注册工具注入行为引导（避免"有指引无工具"）
+    effective = (set(persona.tools) & _tools) if (persona and persona.tools) else _tools
     parts = []
 
-    # Layer 1: 身份
-    soul = load_soul_md()
-    parts.append(soul if soul else DEFAULT_IDENTITY)
+    # Layer 1: 身份（专家替换 or SOUL.md 叠加）
+    if persona and persona.soul_mode == "replace":
+        parts.append(persona.system_prompt)          # 专家正文 = 唯一身份
+    else:
+        soul = load_soul_md()
+        parts.append(soul if soul else DEFAULT_IDENTITY)
+        if persona:                                  # "stack"：人格 + 角色叠加
+            parts.append(persona.system_prompt)
+
+    if team_roster:                                  # 仅 team 主理人
+        parts.append(team_roster)
 
     # 工具行为引导：按注册工具条件注入，数据驱动
     # 首次调用时初始化模块级映射，后续调用复用
@@ -656,7 +709,7 @@ def build_system_prompt(
             "delegate_task": DELEGATE_GUIDANCE,
             "skill_manage": SKILL_MANAGE_GUIDANCE,
         })
-    for tool_name in _tools:
+    for tool_name in effective:
         guidance = _TOOL_GUIDANCE.get(tool_name)
         if guidance:
             parts.append(guidance)
@@ -675,8 +728,14 @@ def build_system_prompt(
     if ctx:
         parts.append(ctx)
 
-    # Skills 索引（走两层缓存，含条件激活过滤）
-    skills_idx = _get_skills_prompt_cached(available_tools=_tools)
+    # Skills 索引：专家声明捆绑技能 → 只展示这些（渐进披露，旁路缓存）；
+    # 否则走两层缓存，含条件激活过滤
+    if persona and persona.skills:
+        skills_idx = _build_filtered_skills_index(
+            available_tools=effective or None, only_names=set(persona.skills)
+        )
+    else:
+        skills_idx = _get_skills_prompt_cached(available_tools=effective or None)
     if skills_idx:
         parts.append(skills_idx)
 
@@ -691,6 +750,9 @@ def build_system_prompt(
     env = build_env_hint()
     if env:
         parts.append(env)
+
+    # 输出样式引导（结构化 markdown + mermaid），放在末尾权重最高
+    parts.append(OUTPUT_FORMAT_GUIDANCE)
 
     # Layer 12: 平台提示（CLI 固定）
     parts.append(CLI_PLATFORM_HINT)

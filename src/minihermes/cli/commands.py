@@ -126,6 +126,7 @@ def handle_slash_command(
             "/compress    — manually trigger context compression\n"
             "/provider [name] — list/switch service provider (immediate)\n"
             "/model [name]    — list/switch model for current provider (immediate)\n"
+            "/persona [op]    — list/view/activate expert persona (next turn)\n"
             "/history     — show current session info\n"
             "/sessions    — list recent sessions\n"
             "/resume [id] — resume a previous session\n"

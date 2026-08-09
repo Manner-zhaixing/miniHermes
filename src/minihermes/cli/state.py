@@ -38,6 +38,9 @@ class AppState:
     session_id: str = ""
     conversation_history: list = field(default_factory=list)
 
+    # 当前会话绑定的专家 id（"" = 无专家；/clear 新建会话继承）
+    current_persona_id: str = ""
+
     # 主事件循环引用（供后台线程通过 run_in_terminal 桥接交互式 I/O）
     _main_loop: object = None
 

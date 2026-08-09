@@ -59,6 +59,8 @@ _COMMAND_DEFS = [
      "cli_desc": "List/switch service provider (immediate)", "desktop_desc": None},
     {"cmd": "/model", "has_arg": True, "cli": True, "desktop": False, "desktop_action": None,
      "cli_desc": "List/switch model for current provider (immediate)", "desktop_desc": None},
+    {"cmd": "/persona", "has_arg": True, "cli": True, "desktop": False, "desktop_action": None,
+     "cli_desc": "List/view/activate expert persona (next turn)", "desktop_desc": None},
     {"cmd": "/quit", "has_arg": False, "cli": True, "desktop": False, "desktop_action": None,
      "cli_desc": "Exit MiniHermes", "desktop_desc": None},
 ]

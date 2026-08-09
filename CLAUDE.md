@@ -20,11 +20,11 @@ Configuration lives at `~/.minihermes/config.yaml` (created by setup wizard from
 ### Testing
 
 ```bash
-uv sync --group test       # Install test deps (pytest, pytest-mock)
-pytest                     # Run tests (no test suite exists yet)
+uv sync --extra test       # Install test deps (pytest, pytest-mock)
+pytest                     # Run tests（pytest 只收集 tests/；pyproject testpaths 已配置）
 ```
 
-No automated test suite currently exists in the project.
+测试套件位于 `tests/`：核心（personas/白名单/字节兼容/team delegate）、CLI `/persona`、桌面后端 API（隔离 DB，不污染真实 state.db）。`desktop/backend/*_test.py` 是 WS 集成脚本（手动跑），非 pytest 用例。
 
 ## Directory Structure
 
@@ -42,6 +42,10 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
     context/      context.py  # ConversationContext (tokens, budget)
                   compressor.py  # 5-phase context compression
                   token_utils.py # Shared token estimation
+    personas/     manifest.py # 专家数据模型 PersonaManifest + md 解析校验（ManifestError）
+                  registry.py # 双源注册表（内置 _builtin/ + ~/.minihermes/personas/ 覆盖）
+                  team.py     # build_team_roster（主理人花名册）/ build_member_prompt（团员 prompt）
+                  _builtin/   # 内置专家 md ×7（go-backend-expert/doc-writer/research-analyst/dev-team…）
     prompt/       builder.py  # 12-layer system prompt assembly
     config/       config.py   # Config class + legacy accessor functions + register_setup_wizard
                   config.yaml # Default config template（包数据）
@@ -134,6 +138,10 @@ User Input → CLI (prompt_toolkit) → Agent.run_conversation()
 | `/setup` | Runtime config wizard (provider, API key, model, etc.) |
 | `/provider [name]` | List/switch service provider (immediate) |
 | `/model [name]` | List/switch model for current provider (immediate) |
+| `/persona` `/persona list` | List personas (agent/team, `◀ active` marker) |
+| `/persona view <id>` | Show persona detail (tools/skills/members/body preview) |
+| `/persona activate <id>` | Switch persona in-session (next turn) |
+| `/persona deactivate` | Exit persona, restore default behavior |
 | `/exit` `/quit` `/q` | Exit |
 | `/<skill-name>` | Load and execute a skill (e.g. `/code-review`) |
 
@@ -147,6 +155,7 @@ User Input → CLI (prompt_toolkit) → Agent.run_conversation()
 - **ToolRegistry** (`tools/registry.py`): Decorator-based tool registration (`@register(schema)`) with schema filtering and execution dispatch. Each instance maintains an independent registry.
 - **CLI** (`cli/`): prompt_toolkit Application with streaming renderer, slash commands, approval flows, clarification modals. Conversation runs in a **background daemon thread** consuming from `AppState.input_queue`; the **main thread** runs the UI event loop.
 - **Skills** (`skills/`): Markdown instruction templates with YAML frontmatter. Discovered from `~/.minihermes/skills/` (global, including built-in synced on first start), `./.minihermes/skills/` (project-local), and external directories. Two-layer cache (LRU + disk snapshot) avoids filesystem scans on every prompt build. Supports conditional activation (hide/show based on available tools), platform matching, supporting files (references/templates/scripts/assets), template variable substitution, and provenance tracking (bundled vs agent-created). See [Skill System](#skill-system) below.
+- **Persona/Expert** (`personas/`): 会话级专家系统。manifest 为单 md（frontmatter 能力声明 + 正文=身份 system prompt），`parse_persona_md` 严格校验（非法抛 `ManifestError`）。`PersonaRegistry` 双源合一（内置 `_builtin/` 优先、`~/.minihermes/personas/` 同 id 覆盖），team 成员惰性解析（缺失剔除+log）。支持 `agent`/`team` 双类型（team = 主理人 + 团员子代理，走 `delegate_task(persona_id=...)`）；`soul_mode: replace|stack`；工具硬白名单（`tools` 声明则白名单∩已注册，空=全开）。`Agent.apply_persona()` 会话级切换（换身份+工具集+token 开销），桌面端按会话懒应用（`_apply_persona_for_session`，`_turn_lock` 内、幂等）；`db.sessions.persona_id` 持久化，压缩子会话继承。无专家时行为逐字节兼容（单测锁定）。CLI `/persona`；桌面主区域专家界面（侧栏导航项「对话|🧠 专家|技能」，`manifest_to_dict` 透传完整 `system_prompt`，卡片墙 → 详情滚动展示角色简介 → 应用=新建会话注入）。
 - **Context Compression** (`context/compressor.py`): 5-phase strategy — boundary determination (HEAD/MIDDLE/TAIL), tool output pruning (>500 chars → one-line summary), LLM summary (12-section structured template), tool pair sanitization (fix orphaned tool_call/result pairs), assembly + session splitting. Anti-thrashing with 60s cooldown between compressions.
 - **Session** (`session/db.py`): SQLite with WAL mode for multi-turn conversation persistence. FTS5 full-text search.
 - **Prompt** (`prompt/builder.py`): Multi-layer system prompt builder. ~6 active layers: Layer 1 Identity (SOUL.md), Layer 7 Memory snapshot, Layer 9 Context files, Layer 10 Model name, Layer 11 Environment detection, Layer 12 Platform guidance. Invisible-char and prompt-injection scanning. No timestamp/date is injected.

@@ -86,6 +86,80 @@ def _handle_model_command(user_input: str, state: AppState):
     print(f"[switched model: {new_model}]")
 
 
+def _handle_persona_command(user_input: str, state: AppState, db, agent):
+    """/persona [list|view <id>|activate <id>|deactivate]：专家列表/详情/切换。
+
+    CLI 可同会话切换：activate/deactivate 立即换身份与工具集，下一轮生效（不打断当前轮）。
+    """
+    from minihermes.core.personas import get_persona_registry
+
+    parts = user_input.strip().split(None, 2)
+    sub = parts[1].lower() if len(parts) > 1 else ""
+    arg = parts[2] if len(parts) > 2 else ""
+    reg = get_persona_registry()
+
+    if not sub or sub == "list":
+        lines = ["[available personas] 本地自建: ~/.minihermes/personas/*.md"]
+        for m in reg.list():
+            kind = "team" if m.is_team() else "agent"
+            marker = " ◀ active" if m.id == state.current_persona_id else ""
+            blurb = m.tagline or (m.description[:40] if m.description else "")
+            lines.append(f"  {m.id} [{kind}] — {m.name}: {blurb}{marker}")
+        lines.append("[usage: /persona view <id> | /persona activate <id> | /persona deactivate]")
+        print("\n".join(lines))
+        return
+
+    if sub == "view":
+        if not arg:
+            print("[usage: /persona view <id>]")
+            return
+        m = reg.get(arg)
+        if not m:
+            print(f"[unknown persona: {arg}]")
+            return
+        lines = [
+            f"[{m.id} ({m.name})] 来源: {m.source} | 类型: {m.expert_type}",
+            f"  图标: {m.icon or '-'} | 类别: {m.category} | soul_mode: {m.soul_mode}",
+        ]
+        if m.tagline:
+            lines.append(f"  一句话: {m.tagline}")
+        if m.description:
+            lines.append(f"  描述: {m.description}")
+        lines.append(f"  工具白名单: {', '.join(m.tools) or '(全开)'}")
+        lines.append(f"  捆绑技能: {', '.join(m.skills) or '(无)'}")
+        if m.is_team():
+            members = ", ".join(mm.id for mm in m.resolved_members) or "(无)"
+            lines.append(f"  团员: {members} | max_team_iterations: {m.max_team_iterations}")
+        if m.default_init_prompt:
+            lines.append(f"  激活开场: {m.default_init_prompt[:60]}{'...' if len(m.default_init_prompt) > 60 else ''}")
+        lines.append(f"  正文预览: {m.system_prompt[:150]}{'...' if len(m.system_prompt) > 150 else ''}")
+        print("\n".join(lines))
+        return
+
+    if sub == "activate":
+        if not arg:
+            print("[usage: /persona activate <id>]")
+            return
+        m = reg.resolve(arg)
+        if m is None:
+            print(f"[unknown persona: {arg}]")
+            return
+        agent.apply_persona(m)
+        db.set_persona(state.session_id, m.id)
+        state.current_persona_id = m.id
+        print(f"[persona activated: {m.name} ({m.id}) — 下一轮生效]")
+        return
+
+    if sub == "deactivate":
+        agent.apply_persona(None)
+        db.set_persona(state.session_id, None)
+        state.current_persona_id = ""
+        print("[persona deactivated — 恢复默认行为]")
+        return
+
+    print(f"[unknown /persona subcommand: {sub}. usage: list | view <id> | activate <id> | deactivate]")
+
+
 def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
     """处理斜杠命令。返回 (is_init_run, handled, should_skip)。
 
@@ -115,6 +189,13 @@ def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
         state.invalidate()
         return is_init_run, True
 
+    # /persona: 专家列表/详情/切换（需 state + db + agent，单独处理）
+    if user_input.strip().lower().startswith("/persona"):
+        _handle_persona_command(user_input, state, db, agent)
+        state.status_text = f" ⚕ {model_name[:26]}"
+        state.invalidate()
+        return is_init_run, True
+
     if user_input.strip().lower().startswith("/model"):
         _handle_model_command(user_input, state)
         state.status_text = f" ⚕ {state.model_name[:26]}"
@@ -129,6 +210,16 @@ def _handle_slash_commands(user_input: str, agent, state, db, model_name: str):
         state.conversation_history = history
         if sid:
             state.session_id = sid
+            # /clear 新建会话：继承当前专家（同一 Agent 实例已带 persona，补 DB 持久化）
+            if user_input.strip().lower().startswith("/clear") and state.current_persona_id:
+                db.set_persona(sid, state.current_persona_id)
+            # /resume 恢复会话：带出绑定专家（读 DB → 重新 apply）
+            if user_input.strip().lower().startswith("/resume"):
+                from minihermes.core.personas import get_persona_registry
+                pid = db.get_persona(sid) or ""
+                m = get_persona_registry().resolve(pid) if pid else None
+                agent.apply_persona(m)
+                state.current_persona_id = pid
         if user_input.strip().lower().startswith("/compress"):
             agent.request_compress()
         agent.reset_token_tracking()
