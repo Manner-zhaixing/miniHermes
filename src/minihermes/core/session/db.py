@@ -8,8 +8,10 @@ SQLite 会话持久化。
   - 列出/删除历史会话
 """
 
+import functools
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -33,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     reasoning_tokens INTEGER DEFAULT 0,
     title TEXT,
     parent_session_id TEXT,
-    persona_id TEXT
+    persona_id TEXT,
+    cwd TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -66,9 +69,27 @@ END;
 """
 
 
+def _locked(fn):
+    """序列化 SessionDB 方法调用（多会话并行线程共享同一 sqlite 连接）。
+
+    桌面端多会话并行后，各会话 turn 跑在独立线程、同时读写 state.db。
+    Python sqlite3 连接对象（即使 check_same_thread=False）不支持并发使用，
+    必须用锁串行化。WAL 已在文件层串行写，这里只是保护连接对象的线程安全。
+    CLI 单线程不受影响。用 RLock 以支持方法间嵌套调用（如 create_child_session）。
+    """
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+
+    return wrapper
+
+
 class SessionDB:
     def __init__(self):
         self._list_limit = SESSION_LIST_LIMIT
+        self._lock = threading.RLock()
 
         p = Path(SESSION_DB_PATH).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -85,11 +106,14 @@ class SessionDB:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT")
         if "persona_id" not in cols:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN persona_id TEXT")
+        if "cwd" not in cols:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT")
         # messages 表：subagent_trace（子代理过程 JSON，仅供前端展示，不进 LLM 历史）
         msg_cols = [r[1] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()]
         if "subagent_trace" not in msg_cols:
             self._conn.execute("ALTER TABLE messages ADD COLUMN subagent_trace TEXT")
 
+    @_locked
     def create_session(
         self,
         session_id: str,
@@ -97,19 +121,22 @@ class SessionDB:
         model_config: str = None,
         system_prompt: str = None,
         persona_id: str = None,
+        cwd: str = None,
     ) -> None:
         self._conn.execute(
-            """INSERT OR IGNORE INTO sessions (id, source, model, model_config, system_prompt, started_at, persona_id)
-               VALUES (?, 'cli', ?, ?, ?, ?, ?)""",
-            (session_id, model, model_config, system_prompt, time.time(), persona_id),
+            """INSERT OR IGNORE INTO sessions (id, source, model, model_config, system_prompt, started_at, persona_id, cwd)
+               VALUES (?, 'cli', ?, ?, ?, ?, ?, ?)""",
+            (session_id, model, model_config, system_prompt, time.time(), persona_id, cwd),
         )
 
+    @_locked
     def end_session(self, session_id: str, end_reason: str = "user_exit") -> None:
         self._conn.execute(
             "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL",
             (time.time(), end_reason, session_id),
         )
 
+    @_locked
     def create_child_session(
         self,
         parent_id: str,
@@ -118,21 +145,26 @@ class SessionDB:
         model_config: str = None,
         system_prompt: str = None,
         persona_id: str = None,
+        cwd: str = None,
     ) -> None:
         """压缩后创建子 session，同时结束 parent session。
 
-        默认继承 parent 的 persona_id（压缩不丢专家）；显式传入可覆盖。
+        默认继承 parent 的 persona_id 与 cwd（压缩不丢专家、不丢工作目录）；
+        显式传入可覆盖。
         """
         self.end_session(parent_id, end_reason="compression")
         if persona_id is None:
             persona_id = self.get_persona(parent_id)
+        if cwd is None:
+            cwd = self.get_session_cwd(parent_id)
         self._conn.execute(
             """INSERT INTO sessions (id, source, model, model_config, system_prompt,
-               started_at, parent_session_id, persona_id)
-               VALUES (?, 'cli', ?, ?, ?, ?, ?, ?)""",
-            (child_id, model, model_config, system_prompt, time.time(), parent_id, persona_id),
+               started_at, parent_session_id, persona_id, cwd)
+               VALUES (?, 'cli', ?, ?, ?, ?, ?, ?, ?)""",
+            (child_id, model, model_config, system_prompt, time.time(), parent_id, persona_id, cwd),
         )
 
+    @_locked
     def set_persona(self, session_id: str, persona_id: str | None) -> None:
         """绑定/解绑会话专家（persona_id=None 解绑恢复默认）。"""
         self._conn.execute(
@@ -140,6 +172,7 @@ class SessionDB:
             (persona_id, session_id),
         )
 
+    @_locked
     def get_persona(self, session_id: str) -> str | None:
         """读取会话绑定的专家 id（无则 None）。"""
         cur = self._conn.execute(
@@ -148,6 +181,35 @@ class SessionDB:
         row = cur.fetchone()
         return row[0] if row else None
 
+    @_locked
+    def get_session_cwd(self, session_id: str) -> str | None:
+        """读取会话绑定的工作目录（未绑定/迁移前行 → None）。"""
+        cur = self._conn.execute(
+            "SELECT cwd FROM sessions WHERE id = ?", (session_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    @_locked
+    def set_session_cwd(self, session_id: str, cwd: str) -> None:
+        """更新会话绑定的工作目录（空会话切目录时重绑定用）。"""
+        self._conn.execute(
+            "UPDATE sessions SET cwd = ? WHERE id = ?", (cwd, session_id)
+        )
+
+    @_locked
+    def get_session_message_count(self, session_id: str) -> int | None:
+        """读取会话已产生的消息条数（append_message 每写一行 +1）。
+
+        作为「切换工作目录守卫」的权威输入；会话不存在返回 None。
+        """
+        cur = self._conn.execute(
+            "SELECT message_count FROM sessions WHERE id = ?", (session_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    @_locked
     def resolve_resume_session_id(self, session_id: str) -> str:
         """沿压缩链路走到最新的有消息的 session。"""
         current = session_id
@@ -172,6 +234,7 @@ class SessionDB:
                 return current
         return current
 
+    @_locked
     def append_message(
         self,
         session_id: str,
@@ -198,12 +261,14 @@ class SessionDB:
             (session_id,),
         )
 
+    @_locked
     def increment_tool_calls(self, session_id: str, count: int = 1) -> None:
         self._conn.execute(
             "UPDATE sessions SET tool_call_count = tool_call_count + ? WHERE id = ?",
             (count, session_id),
         )
 
+    @_locked
     def update_tokens(
         self,
         session_id: str,
@@ -220,6 +285,7 @@ class SessionDB:
             (input_tokens, output_tokens, reasoning_tokens, session_id),
         )
 
+    @_locked
     def get_token_stats(self, session_id: str) -> dict:
         """从 messages 表统计会话 token 消耗（CLI 与桌面共用）。
 
@@ -244,6 +310,7 @@ class SessionDB:
         except Exception:
             return {"input": 0, "output": 0, "reasoning": 0}
 
+    @_locked
     def get_messages(self, session_id: str) -> list[dict]:
         cur = self._conn.execute(
             """SELECT role, content, tool_calls, tool_call_id, tool_name, reasoning, token_count, finish_reason, msg_type, subagent_trace
@@ -275,6 +342,7 @@ class SessionDB:
             messages.append(msg)
         return messages
 
+    @_locked
     def get_messages_for_llm(self, session_id: str) -> list[dict]:
         """加载用于 LLM 的消息：反向遍历，遇到最近的 summary 停止。
 
@@ -295,13 +363,14 @@ class SessionDB:
 
         return [all_msgs[summary_idx]] + all_msgs[summary_idx + 1:]
 
+    @_locked
     def list_sessions(self, limit: int = None) -> list[dict]:
         if limit is None:
             limit = self._list_limit
         cur = self._conn.execute(
             """SELECT id, source, model, model_config, system_prompt, started_at, ended_at,
                       end_reason, message_count, tool_call_count, input_tokens, output_tokens,
-                      reasoning_tokens, title, parent_session_id, persona_id
+                      reasoning_tokens, title, parent_session_id, persona_id, cwd
                FROM sessions ORDER BY started_at DESC LIMIT ?""",
             (limit,),
         )
@@ -323,10 +392,12 @@ class SessionDB:
                 "title": row[13],
                 "parent_session_id": row[14],
                 "persona_id": row[15],
+                "cwd": row[16],
             }
             for row in cur.fetchall()
         ]
 
+    @_locked
     def get_last_session_id(self) -> str | None:
         cur = self._conn.execute(
             "SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1"
@@ -334,16 +405,19 @@ class SessionDB:
         row = cur.fetchone()
         return row[0] if row else None
 
+    @_locked
     def set_title(self, session_id: str, title: str) -> None:
         self._conn.execute(
             "UPDATE sessions SET title = ? WHERE id = ?",
             (title.strip()[:100], session_id),
         )
 
+    @_locked
     def delete_session(self, session_id: str) -> None:
         self._conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
+    @_locked
     def search_messages(self, query: str, limit: int = 5) -> list[dict]:
         """FTS5 搜索消息内容，按 session 分组返回匹配片段。"""
         try:
@@ -382,6 +456,7 @@ class SessionDB:
 
         return list(sessions.values())
 
+    @_locked
     def backfill_fts(self):
         """首次启动时回填已有消息到 FTS 表。"""
         count = self._conn.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0]
@@ -391,5 +466,6 @@ class SessionDB:
                 "SELECT id, content FROM messages WHERE content IS NOT NULL"
             )
 
+    @_locked
     def close(self):
         self._conn.close()

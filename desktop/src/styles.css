@@ -92,31 +92,97 @@ body {
 }
 .session-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,86,207,0.1); }
 
-.session-list { flex: 1; overflow-y: auto; padding: 4px 10px 10px; }
+.session-list { flex: 1; overflow-y: auto; padding: 4px 8px 10px; }
 .session-group-label {
   font-size: 11px; color: var(--text-tertiary);
   padding: 12px 8px 6px; letter-spacing: 0.4px;
 }
-.session-empty { padding: 12px 8px; font-size: 12.5px; color: var(--text-tertiary); }
-
-.session-item {
+/* 目录分区头：caret + 文件夹 emoji（无瓦片）+ 项目名 + 父路径 + 计数徽章。
+   与 30px 圆形会话头像形成「标签 vs 条目」的尺寸/形态差，避免混淆。 */
+.session-group { margin-bottom: 2px; }
+.session-group-label.dir {
   display: flex; align-items: center; gap: 6px;
-  padding: 8px 10px; border-radius: 10px; cursor: pointer;
+  cursor: pointer; user-select: none; padding: 7px 6px 5px;
+  border-radius: 8px; transition: background 0.12s;
+}
+.session-group-label.dir:hover { background: var(--surface-hover); }
+/* 嵌套会话容器：缩进 + 左竖线，直观表达「目录 ⊃ 会话」 */
+.session-group-body {
+  margin-left: 15px; padding: 2px 0 4px 7px;
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+.dir-caret { font-size: 9px; color: var(--text-tertiary); width: 10px; flex-shrink: 0; }
+.dir-icon {
+  flex-shrink: 0; width: 18px; text-align: center;
+  font-size: 13px; line-height: 1;
+}
+.dir-name {
+  flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+}
+.dir-parent {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; color: var(--text-tertiary);
+  font-family: "SF Mono", Menlo, monospace; letter-spacing: 0;
+}
+.dir-count {
+  flex-shrink: 0; font-size: 10px; padding: 1px 7px; border-radius: 10px;
+  background: var(--surface-hover); color: var(--text-tertiary);
+}
+.session-empty { padding: 12px 8px; font-size: 12.5px; color: var(--text-tertiary); }
+.session-empty-search { padding: 12px 8px; font-size: 12.5px; color: var(--text-tertiary); }
+
+/* 会话项 = 宽松卡片：头像 + 标题行（流式徽标）+ meta 行 */
+.session-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 11px; cursor: pointer;
   border: 1px solid transparent;
-  transition: background 0.12s, border-color 0.12s;
-  margin-bottom: 2px;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  margin-bottom: 4px;
 }
 .session-item:hover { background: var(--surface-hover); }
 .session-item.active {
-  background: #fff; border-color: var(--accent-border);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
+.session-item.active .session-title { color: var(--accent-strong); }
+.session-item.streaming { border-color: var(--accent-border); }
+.session-avatar {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--surface-hover); color: var(--text-tertiary);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; user-select: none;
+}
+.session-avatar.persona { font-size: 15px; }
 .session-item-main { flex: 1; min-width: 0; }
-.session-title {
-  color: var(--text); font-size: 13px; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
+.session-title-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
 }
-.session-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.session-title {
+  color: var(--text); font-size: 13px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.session-streaming {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--accent); background: var(--accent-soft);
+  padding: 1px 6px; border-radius: 8px; font-weight: 500;
+  white-space: nowrap;
+}
+.stream-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: stream-pulse 1.2s ease-in-out infinite;
+}
+@keyframes stream-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+.session-meta {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: 11px; color: var(--text-tertiary); margin-top: 3px;
+}
+.session-time, .session-count { flex-shrink: 0; }
 .session-delete {
   visibility: hidden; border: none; background: none; color: var(--text-tertiary);
   font-size: 15px; cursor: pointer; padding: 0 3px; border-radius: 5px; line-height: 1;
@@ -150,39 +216,6 @@ body {
   padding: 8px 28px 0; display: flex; align-items: center; gap: 8px;
   background: var(--bg); flex-shrink: 0;
 }
-/* 模式选择下拉 */
-.mode-picker { position: relative; flex-shrink: 0; }
-.mode-trigger {
-  display: flex; align-items: center; gap: 6px;
-  border: 1px solid var(--border); background: var(--surface);
-  border-radius: 8px; padding: 3px 9px; cursor: pointer;
-  font-size: 11.5px; color: var(--text-dim); transition: all 0.12s;
-}
-.mode-trigger:hover { border-color: var(--accent); color: var(--text); }
-.mode-trigger.plan { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
-.mode-trigger-ic { font-size: 12px; }
-.mode-trigger-label { font-weight: 500; }
-.mode-chevron { font-size: 9px; transition: transform 0.15s; }
-.mode-chevron.open { transform: rotate(180deg); }
-.mode-menu {
-  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 60;
-  width: 250px; background: #fff; border: 1px solid var(--border);
-  border-radius: 12px; box-shadow: 0 10px 34px rgba(23,23,35,0.14);
-  padding: 5px; display: flex; flex-direction: column; gap: 2px;
-}
-.mode-menu-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 11px; border: none; border-radius: 9px;
-  background: transparent; cursor: pointer; text-align: left;
-  transition: background 0.1s;
-}
-.mode-menu-item:hover { background: var(--surface-hover); }
-.mode-menu-item.active { background: var(--accent-soft); }
-.mode-menu-ic { font-size: 15px; flex-shrink: 0; }
-.mode-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.mode-menu-title { font-size: 12.5px; font-weight: 500; color: var(--text); }
-.mode-menu-desc { font-size: 11px; color: var(--text-tertiary); }
-.mode-menu-check { margin-left: auto; color: var(--accent); font-size: 13px; }
 .cwd-picker {
   display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
   border: 1px solid var(--border); background: var(--surface);
@@ -191,6 +224,13 @@ body {
 }
 .cwd-picker:hover { border-color: var(--accent); background: var(--surface-hover); }
 .cwd-picker.empty { border-style: dashed; color: var(--text-tertiary); }
+/* 锁定态：当前会话已有消息时禁止切换（守卫 A） */
+.cwd-picker.locked,
+.cwd-picker.locked:hover {
+  cursor: not-allowed; opacity: 0.55; border-color: var(--border);
+  background: var(--surface); pointer-events: none;
+}
+.cwd-picker.locked .cwd-picker-btn { background: var(--surface-hover); color: var(--text-tertiary); }
 .cwd-picker-ic { font-size: 13px; flex-shrink: 0; }
 .cwd-picker-path {
   color: var(--text-dim); max-width: 480px;
@@ -250,7 +290,7 @@ body {
 
 .message-list {
   flex: 1; overflow-y: auto; padding: 16px 28px 8px;
-  display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: 4px;
 }
 
 .date-divider {
@@ -273,7 +313,7 @@ body {
 .empty-hint { margin-top: 14px !important; font-size: 12.5px !important; color: var(--text-tertiary) !important; }
 
 /* ── 消息 ──────────────────────────────────────────────── */
-.msg-row { display: flex; gap: 10px; padding: 7px 0; }
+.msg-row { display: flex; gap: 10px; padding: 8px 0; }
 .msg-avatar {
   width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -281,7 +321,7 @@ body {
 }
 .msg-row.assistant .msg-avatar { background: transparent; }
 .msg-row.user .msg-avatar { display: none; }
-.msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.msg-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 
 .msg-row.user { justify-content: flex-end; }
 .msg-row.user .msg-body { align-items: flex-end; }
@@ -289,51 +329,56 @@ body {
   background: var(--surface-hover); color: var(--text);
   padding: 9px 14px; border-radius: 14px 14px 4px 14px;
   max-width: 74%; white-space: pre-wrap; word-break: break-word;
-  font-size: 13.5px; line-height: 1.65;
+  font-size: 14px; line-height: 1.6;
 }
 
-.msg-content { line-height: 1.45; font-size: 13.8px; max-width: 100%; }
+.msg-content { line-height: 1.7; font-size: 14.5px; max-width: 100%; }
 .msg-content.markdown {
   padding: 1px 0;
-  /* 保留单换行：markdown 默认把软换行塌陷为空格，中文 LLM 输出的分行会连成一段 */
-  white-space: pre-wrap;
+  /* 单换行由 remark-breaks 转成 <br> 保留；块元素间空白用 normal 塌陷，行距由 line-height 1.7 控制 */
+  white-space: normal;
 }
 
 .placeholder { color: var(--text-dim); }
 .cursor-blink { animation: blink 1s step-start infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 
-/* Markdown（收紧边距：标题/分隔线/段落堆叠不再产生大片空行） */
-.markdown p { margin: 4px 0; }
-.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 10px 0 4px; line-height: 1.4; }
-.markdown h1 { font-size: 17px; } .markdown h2 { font-size: 16px; }
-.markdown h3 { font-size: 15px; } .markdown h4 { font-size: 14px; }
-.markdown ul, .markdown ol { padding-left: 22px; margin: 5px 0; }
-.markdown li { margin: 2px 0; }
+/* Markdown 排版：行距 1.7、段落/标题间距放宽、标题层级梯度拉开、加粗统一 600 */
+.markdown { font-weight: 400; }
+.markdown p { margin: 6px 0; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 16px 0 6px; line-height: 1.4; font-weight: 600; }
+.markdown h1 { font-size: 19px; } .markdown h2 { font-size: 17px; }
+.markdown h3 { font-size: 16px; } .markdown h4 { font-size: 15px; }
+.markdown strong, .markdown b { font-weight: 600; }
+.markdown ul, .markdown ol { padding-left: 22px; margin: 6px 0; }
+.markdown li { margin: 3px 0; }
 .markdown blockquote {
-  border-left: 3px solid var(--accent); padding: 2px 12px; color: var(--text-dim); margin: 8px 0;
+  border-left: 3px solid var(--accent); padding: 6px 14px; color: var(--text-dim);
+  margin: 10px 0; line-height: 1.6;
 }
-.markdown hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
-.markdown .table-wrap { margin: 6px 0; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+.markdown .table-wrap { margin: 8px 0; }
 .markdown a { color: var(--accent); text-decoration: none; }
 .markdown a:hover { text-decoration: underline; }
 .inline-code {
   background: var(--code-bg); border: 1px solid var(--code-border);
-  border-radius: 4px; padding: 1px 5px; font-size: 12.5px;
-  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  border-radius: 4px; padding: 1px 5px; font-size: 13px; font-weight: 400;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   color: var(--text-dim);
 }
 .code-block {
   background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 10px;
-  padding: 12px 14px; overflow-x: auto; margin: 8px 0;
-  font-size: 12.5px; line-height: 1.55;
-  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  padding: 14px 16px; overflow-x: auto; margin: 10px 0;
+  font-size: 13px; line-height: 1.65; font-weight: 400;
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   color: var(--text);
-  /* 覆盖容器的 pre-wrap：代码块保持横向滚动，不被强制换行 */
+  /* 覆盖容器的 white-space：代码块保持横向滚动，不被强制换行 */
   white-space: pre;
 }
 
 .code-block code { background: none; border: none; padding: 0; font-family: inherit; }
+/* 覆盖 highlight.js github 主题自带底色，保留 app 的 --code-bg 观感 */
+.code-block code.hljs { background: transparent; padding: 0; }
 .table-wrap { overflow-x: auto; margin: 8px 0; }
 .markdown table { border-collapse: collapse; font-size: 13px; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 12px; }
@@ -361,7 +406,7 @@ body {
 .thinking-meta { color: #B59A55; font-size: 11px; margin-left: auto; }
 .thinking-dots { animation: blink 1s step-start infinite; }
 .thinking-content {
-  padding: 9px 14px; font-size: 12.5px; color: var(--thinking-text); line-height: 1.6;
+  padding: 9px 14px; font-size: 12.5px; color: var(--thinking-text); line-height: 1.5;
   white-space: pre-wrap; word-break: break-word; font-family: inherit;
   border-top: 1px dashed rgba(210,153,34,0.35); max-height: 320px; overflow-y: auto;
 }
@@ -583,37 +628,6 @@ body {
   max-height: 160px; overflow: auto; margin-top: 6px; white-space: pre-wrap;
 }
 
-/* Plan 审批弹窗 */
-.plan-modal { width: 620px; }
-.plan-path-row {
-  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
-  padding: 7px 10px;
-}
-.plan-path {
-  flex: 1; font-size: 11.5px; color: var(--text-dim); min-width: 0;
-  font-family: "SF Mono", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.plan-copy-btn {
-  flex-shrink: 0; font-size: 11px; border: 1px solid var(--border); background: #fff;
-  border-radius: 7px; padding: 3px 9px; cursor: pointer; color: var(--text-dim);
-}
-.plan-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
-.plan-preview { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.plan-toggle {
-  width: 100%; display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; background: var(--surface); border: none; cursor: pointer;
-  font-size: 12px; color: var(--text-dim); text-align: left;
-}
-.plan-toggle:hover { background: var(--surface-hover); }
-.plan-chevron { font-size: 10px; }
-.plan-text {
-  margin: 0; padding: 12px 14px; font-size: 12px; line-height: 1.6;
-  background: #fff; border-top: 1px solid var(--border);
-  white-space: pre-wrap; word-break: break-word;
-  font-family: "SF Mono", Menlo, monospace; max-height: 300px; overflow-y: auto;
-}
-.plan-text.collapsed { color: var(--text-dim); max-height: 120px; overflow: hidden; }
 .btn.deny { background: #fff; color: var(--danger); border: 1px solid rgba(229,72,77,0.4); }
 .btn.deny:hover { background: #FDF3F3; }
 .btn.allow-once { background: var(--accent-soft); color: var(--accent); }
@@ -886,12 +900,11 @@ body {
 
 /* ── 会话项专家徽章（meta 区行内）───────────────────────── */
 .session-persona {
-  display: inline-flex; align-items: center; gap: 3px;
-  margin-left: 6px; padding: 1px 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 6px;
   background: var(--accent-soft); color: var(--accent);
   font-size: 10.5px; font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;
-  vertical-align: middle;
+  vertical-align: middle; flex-shrink: 1;
 }
 
 /* ── 专家：对话头部徽章 ────────────────────────────────── */

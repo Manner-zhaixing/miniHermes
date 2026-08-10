@@ -23,6 +23,13 @@ class SessionDB:
 
 WAL 模式：写入不阻塞读取，支持多线程并发访问。
 
+> ⚠️ 线程安全（桌面多会话并行后）：`sqlite3.Connection` 对象本身（即使
+> `check_same_thread=False`）**不支持并发使用**。桌面端各会话 turn 跑在独立
+> 线程、同时读写 state.db，因此 `SessionDB` 所有公开方法经 `@_locked`
+> （RLock，可嵌套）串行化——RLock 让 `create_child_session → end_session`
+> 这类嵌套调用不死锁。WAL 已在文件层串行写，锁只为保护连接对象。CLI 单线程
+> 不受影响。
+
 ---
 
 ## 2. 增量迁移
@@ -36,8 +43,12 @@ def _migrate(self):
         self.conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT")
     if "end_reason" not in existing:
         self.conn.execute("ALTER TABLE sessions ADD COLUMN end_reason TEXT")
+    if "cwd" not in existing:
+        self.conn.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT")
     # ... 更多列的增量添加
 ```
+
+老库（无 `cwd` 列）升级后自动补列，存量行 `cwd = NULL`（前端归「默认」目录组）。
 
 ---
 
@@ -54,8 +65,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at TEXT,
     ended_at TEXT,
     end_reason TEXT,          -- user_exit/clear/compression/resumed
+    message_count INTEGER DEFAULT 0,   -- 守卫 A 权威输入（append_message 每行 +1）
     parent_session_id TEXT,   -- 压缩链
-    title TEXT
+    title TEXT,
+    persona_id TEXT,          -- 绑定的专家 id
+    cwd TEXT                  -- 会话绑定的工作目录（DB 唯一事实源；NULL=未绑定/归默认）
 )
 ```
 
@@ -109,14 +123,28 @@ def backfill_fts(self):
 ### create_session
 
 ```python
-def create_session(self, session_id, source="cli", model="", ...):
+def create_session(self, session_id, source="cli", model="", ..., persona_id=None, cwd=None):
     self.conn.execute(
-        "INSERT OR IGNORE INTO sessions (id, source, model, ...) VALUES (?, ?, ?, ...)",
-        (session_id, source, model, ...)
+        "INSERT OR IGNORE INTO sessions (id, source, model, ..., persona_id, cwd) VALUES (?, ?, ?, ..., ?, ?)",
+        (session_id, source, model, ..., persona_id, cwd)
     )
 ```
 
-`INSERT OR IGNORE` 保证幂等：重复创建同一 session ID 不会失败。
+`INSERT OR IGNORE` 保证幂等：重复创建同一 session ID 不会失败。`cwd` 为新建会话绑定的工作目录（桌面端 `Kernel.new_session` 传 `os.getcwd()`）。
+
+### cwd 查询 / 重绑定（切换守卫输入）
+
+```python
+def get_session_cwd(self, session_id):        # -> str | None（未绑定/迁移前行）
+def set_session_cwd(self, session_id, cwd):   # 空会话切目录时重绑定
+def get_session_message_count(self, session_id):  # -> int | None（会话不存在 None）
+```
+
+- `get_session_cwd`：会话绑定目录的**唯一事实源**（SessionRuntime 懒加载、压缩子会话继承、resume 自动切换都读它）。
+- `set_session_cwd`：空会话（0 消息）跟随新目录时重绑定。
+- `get_session_message_count`：`POST /api/cwd` 切换守卫 A 的权威输入——`>0` 拒绝切换，`==0` 允许并重绑定。
+
+`list_sessions()` 返回的 dict 含 `cwd` 字段；`session_to_ui()` 透传为 `cwd`（前端侧栏按它分组）。
 
 ### end_session
 
@@ -167,18 +195,24 @@ def get_messages_for_llm(self, session_id):
 ## 6. Session 分裂（压缩链路）
 
 ```python
-def create_child_session(self, parent_session_id):
+def create_child_session(self, parent_session_id, ..., persona_id=None, cwd=None):
     # 1. 结束父 session
     self.end_session(parent_session_id, end_reason="compression")
 
-    # 2. 创建子 session
+    # 2. 创建子 session（默认继承父的 persona_id 与 cwd，显式传参可覆盖）
+    if persona_id is None:
+        persona_id = self.get_persona(parent_session_id)
+    if cwd is None:
+        cwd = self.get_session_cwd(parent_session_id)
     child_id = generate_session_id()
     self.conn.execute(
-        "INSERT INTO sessions (id, parent_session_id, ...) VALUES (?, ?, ...)",
-        (child_id, parent_session_id, ...)
+        "INSERT INTO sessions (id, parent_session_id, ..., persona_id, cwd) VALUES (?, ?, ..., ?, ?)",
+        (child_id, parent_session_id, ..., persona_id, cwd)
     )
     return child_id
 ```
+
+压缩子会话继承父工作目录——压缩不丢会话绑定的目录。
 
 **分裂链：**
 ```

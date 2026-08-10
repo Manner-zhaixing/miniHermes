@@ -34,8 +34,9 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
   __init__.py  __main__.py    # python -m minihermes
   main.py                     # CLI 入口（console script: minihermes = minihermes.main:main）
   core/                       # ★ 共享核心（前端无关；禁止 import cli/prompt_toolkit/rich）
-    agent/        agent.py    # Conversation loop orchestrator
+    agent/        agent.py    # Conversation loop orchestrator（含 per-session cwd 持久化 self.cwd）
                   delegate.py # Sub-agent delegation
+                  runtime_ctx.py  # 线程局部「当前会话」上下文（sid + cwd；桌面多会话并行隔离）
     approval/     engine.py   # Security approval engine
     provider/     provider.py # OpenAI SDK wrapper (streaming, retry, reasoning)
                   registry.py # 多厂商预设注册表（deepseek/glm…，OpenAI 兼容）
@@ -53,13 +54,13 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
                   __init__.py # Public API + eager imports for @register side effects
                   retry.py    # Tool execution retry with backoff
                   approval.py # Approval pattern data (HARDLINE, DANGEROUS, SENSITIVE)
-                  bash.py     # Shell command execution
-                  files.py    # File read/write/list
+                  bash.py     # Shell command execution（cwd 按会话绑定目录 thread-local）
+                  files.py    # File read/write/list（相对路径按会话绑定目录锚定）
                   search.py   # Exa AI web search
                   code_execution.py  # Cloud sandbox code execution
                   memory.py   # Cross-session persistent memory
                   delegate.py # Delegate task schema (execution in core/agent/delegate.py)
-                  todo.py     # Task planning
+                  todo.py     # Task planning（多会话：按线程会话 bucket 隔离）
                   clarify.py  # User clarification
                   image_gen.py # Image generation via Pollinations.ai
                   process_tool.py  # System process listing
@@ -67,7 +68,7 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
                   skills_tool.py    # Skill loading
                   skill_manage.py   # Skill lifecycle management
                   web_extract.py    # Web page content extraction
-    session/      db.py       # SQLite WAL persistence（含 get_token_stats）
+    session/      db.py       # SQLite WAL persistence（RLock 串行化连接；sessions.cwd 列 + 迁移；含 get_session_cwd/set_session_cwd/get_session_message_count）
     skills/       manager.py  # Skill discovery, YAML frontmatter parsing, index building
                   preprocessing.py  # Template var substitution, inline shell expansion
                   guard.py          # Security scanner for agent-created skills
@@ -75,7 +76,7 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
     output.py                 # ANSI 旁路输出（纯 print，无 prompt_toolkit/rich）
     rendering.py              # Renderer Protocol + NullRenderer（核心↔前端事件缝）
     services/                 # ★ 共享编排（CLI 与桌面复用）
-      plan.py                 # Plan 常量 + run_plan_flow（统一两端三阶段流程）
+      plan.py                 # Plan 常量 + run_plan_flow（仅 CLI /plan 使用；桌面端已移除 plan 模式）
       context_ref.py          # @file reference preprocessor
       session_service.py      # session_id / token 统计 / session_to_ui
       commands.py             # 斜杠命令注册表（CLI + 桌面单一事实源）
@@ -94,9 +95,10 @@ src/minihermes/               # ★ 单发行版 minihermes（hatchling 打包�
     approval.py               # Approval UI rendering
     clarify.py                # Clarify UI rendering
 desktop/                      # ★ 桌面前端（Electron + React + FastAPI 子进程）
-  backend/server.py           # FastAPI 后端，仅 import minihermes.core.*
-  backend/gui_renderer.py     # GuiRenderer（实现 core.rendering.Renderer）
-  electron/ src/ scripts/ resources/ package.json
+  backend/server.py           # FastAPI 后端，仅 import minihermes.core.*；多会话并行（SessionRuntime）+ 会话绑定 cwd + 切换守卫
+  backend/gui_renderer.py     # GuiRenderer（实现 core.rendering.Renderer，事件全带 session_id）
+  backend/ws_concurrent_test.py  # 多会话并发 WS 集成脚本（手动跑：python ws_concurrent_test.py <port>）
+  electron/ src/ scripts/ resources/ package.json   # Sidebar.jsx = 会话列表：按目录分组（分区头+嵌套会话：分区头=文件夹 emoji+项目名+父路径+计数，会话卡片缩进+左竖线，去混淆）；MessageItem.jsx = 对话消息渲染（流式 markdown：remark-breaks 单换行 → <br>、行距 1.7/段落 6px、标题梯度 15-19px、rehype-highlight 语法高亮，浅色 github 主题）
 ```
 
 ## Message Flow
@@ -155,9 +157,11 @@ User Input → CLI (prompt_toolkit) → Agent.run_conversation()
 - **ToolRegistry** (`tools/registry.py`): Decorator-based tool registration (`@register(schema)`) with schema filtering and execution dispatch. Each instance maintains an independent registry.
 - **CLI** (`cli/`): prompt_toolkit Application with streaming renderer, slash commands, approval flows, clarification modals. Conversation runs in a **background daemon thread** consuming from `AppState.input_queue`; the **main thread** runs the UI event loop.
 - **Skills** (`skills/`): Markdown instruction templates with YAML frontmatter. Discovered from `~/.minihermes/skills/` (global, including built-in synced on first start), `./.minihermes/skills/` (project-local), and external directories. Two-layer cache (LRU + disk snapshot) avoids filesystem scans on every prompt build. Supports conditional activation (hide/show based on available tools), platform matching, supporting files (references/templates/scripts/assets), template variable substitution, and provenance tracking (bundled vs agent-created). See [Skill System](#skill-system) below.
-- **Persona/Expert** (`personas/`): 会话级专家系统。manifest 为单 md（frontmatter 能力声明 + 正文=身份 system prompt），`parse_persona_md` 严格校验（非法抛 `ManifestError`）。`PersonaRegistry` 双源合一（内置 `_builtin/` 优先、`~/.minihermes/personas/` 同 id 覆盖），team 成员惰性解析（缺失剔除+log）。支持 `agent`/`team` 双类型（team = 主理人 + 团员子代理，走 `delegate_task(persona_id=...)`）；`soul_mode: replace|stack`；工具硬白名单（`tools` 声明则白名单∩已注册，空=全开）。`Agent.apply_persona()` 会话级切换（换身份+工具集+token 开销），桌面端按会话懒应用（`_apply_persona_for_session`，`_turn_lock` 内、幂等）；`db.sessions.persona_id` 持久化，压缩子会话继承。无专家时行为逐字节兼容（单测锁定）。CLI `/persona`；桌面主区域专家界面（侧栏导航项「对话|🧠 专家|技能」，`manifest_to_dict` 透传完整 `system_prompt`，卡片墙 → 详情滚动展示角色简介 → 应用=新建会话注入）。
+- **Persona/Expert** (`personas/`): 会话级专家系统。manifest 为单 md（frontmatter 能力声明 + 正文=身份 system prompt），`parse_persona_md` 严格校验（非法抛 `ManifestError`）。`PersonaRegistry` 双源合一（内置 `_builtin/` 优先、`~/.minihermes/personas/` 同 id 覆盖），team 成员惰性解析（缺失剔除+log）。支持 `agent`/`team` 双类型（team = 主理人 + 团员子代理，走 `delegate_task(persona_id=...)`）；`soul_mode: replace|stack`；工具硬白名单（`tools` 声明则白名单∩已注册，空=全开）。`Agent.apply_persona()` 会话级切换（换身份+工具集+token 开销），桌面端按会话懒应用（`_apply_persona_for_session` → `SessionRuntime.ensure_agent()` 幂等，per-session Agent 上切换）；`db.sessions.persona_id` 持久化，压缩子会话继承。无专家时行为逐字节兼容（单测锁定）。CLI `/persona`；桌面主区域专家界面（侧栏导航项「对话|🧠 专家|技能」，`manifest_to_dict` 透传完整 `system_prompt`，卡片墙 → 详情滚动展示角色简介 → 应用=新建会话注入）。
 - **Context Compression** (`context/compressor.py`): 5-phase strategy — boundary determination (HEAD/MIDDLE/TAIL), tool output pruning (>500 chars → one-line summary), LLM summary (12-section structured template), tool pair sanitization (fix orphaned tool_call/result pairs), assembly + session splitting. Anti-thrashing with 60s cooldown between compressions.
-- **Session** (`session/db.py`): SQLite with WAL mode for multi-turn conversation persistence. FTS5 full-text search.
+- **Session** (`session/db.py`): SQLite with WAL mode for multi-turn conversation persistence. FTS5 full-text search. 所有公开方法经 `@_locked`（RLock）串行化——桌面多会话并行后各会话 turn 线程共享同一连接对象，必须加锁防 `sqlite3.InterfaceError`；CLI 单线程不受影响。
+- **多会话并行（桌面）** (`desktop/backend/server.py`): 同一窗口内不同会话可同时被处理。`Kernel._runtimes: OrderedDict[sid, SessionRuntime]`，每个 `SessionRuntime` 持有专属 `threading.Lock`（同会话串行、跨会话并行）+ 懒建专属 `Agent`（隔离 `_ctx`/`_compressor`/`_interrupt_requested`）+ persona + cwd。`runtime_ctx.py` thread-local 注入当前 sid + cwd（每 turn 跑独立 daemon 线程，锁内 set/finally clear），供 `todo.py` 按会话分桶、工具按会话目录执行。LRU 淘汰上限 `MAX_RUNTIMES=32`（丢内存态、DB 重建）。`Kernel.agent`/`current_sid` 为兼容 shim（tests 依赖）。WS 事件全带 `session_id`，前端按 sid 分流（`messagesBySid` ref-only 更新，仅激活会话触发渲染）；`interrupt` 必带 sid 定向停止。CLI 行为逐字节不变。
+- **工作目录（会话绑定）** (桌面): cwd 模型为「导航 + 会话绑定」双轨。`os.chdir` 只做导航 + 新会话默认目录（`new_session` 绑定 `os.getcwd()`）；会话的路径敏感操作（bash/files/@file/系统提示上下文文件）按**会话绑定目录**执行，桌面端经 `runtime_ctx.current_cwd()`（thread-local，每 turn 注入）；CLI 无 thread-local → 回退 `os.getcwd()`，行为逐字节不变。DB `sessions.cwd` 是唯一事实源（`get_session_cwd`/`set_session_cwd`），压缩子会话继承父 cwd；`general.default_cwd` 首启快照「默认」目录（侧栏分组锚点）。切换守卫双保险：后端 `POST /api/cwd` 按 `get_session_message_count` 权威校验（>0 拒绝、==0 空会话跟随重绑定），前端按钮同步置灰；恢复其他目录会话时自动 `_switch_cwd` 导航（不受守卫限制，在途 turn 走 thread-local 安全）。SessionRuntime 懒加载 cwd + cwd-drift 守卫（`ensure_agent` 检测 `Agent.cwd` 与绑定目录不一致时重刷 prompt）。
 - **Prompt** (`prompt/builder.py`): Multi-layer system prompt builder. ~6 active layers: Layer 1 Identity (SOUL.md), Layer 7 Memory snapshot, Layer 9 Context files, Layer 10 Model name, Layer 11 Environment detection, Layer 12 Platform guidance. Invisible-char and prompt-injection scanning. No timestamp/date is injected.
 
 ## Sub-agent Delegation

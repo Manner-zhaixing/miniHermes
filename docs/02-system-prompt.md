@@ -124,6 +124,12 @@ context_text = build_context_files_prompt(cwd)
 
 每个文件经过：`注入检测 → 截断(20K chars) → 包装为 # Project Context 块`。
 
+### 会话绑定 cwd（桌面端）
+
+`build_system_prompt` 的 `cwd` 参数在桌面端传入**该会话绑定的工作目录**（`SessionRuntime._session_cwd()`，DB 事实源），上下文文件 / 环境块因此锚定会话目录而非进程全局 cwd。CLI 不设置 → 回退 `os.getcwd()`，行为逐字节不变。
+
+`Agent.reload_system_prompt(cwd=None)` 持久化绑定目录：解析 `cwd or self.cwd or os.getcwd()` 后写入 `self.cwd`。后续不带 `cwd` 的重建（`switch_provider` / `apply_persona`）保持绑定目录；仅显式 `cwd=` 才重绑定。桌面端 `SessionRuntime.ensure_agent` 的 **cwd-drift 守卫**检测 `Agent.cwd` 与绑定目录不一致时重刷 prompt。
+
 ### Skills 索引
 
 ```python

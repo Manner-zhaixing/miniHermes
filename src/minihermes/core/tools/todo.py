@@ -1,12 +1,25 @@
 """
 任务列表工具：agent 自我管理多步骤任务进度。
 纯内存存储，session 结束即清空。
+
+多会话并行（桌面后端）：按线程当前会话隔离 bucket——
+每个会话的 turn 跑在独立线程，thread-local 注入当前 sid，
+不同会话的 todo 列表互不污染；CLI 无 sid → 走 "" 桶，行为逐字节不变。
 """
 
 import json
+from minihermes.core.agent.runtime_ctx import current_sid
 from minihermes.core.tools import register
 
-_items: list[dict] = []
+# 会话 → todo 列表。键 = runtime_ctx.current_sid()（CLI 为 ""）。
+_items_map: dict[str, list[dict]] = {}
+
+
+def _bucket() -> list[dict]:
+    key = current_sid()
+    if key not in _items_map:
+        _items_map[key] = []
+    return _items_map[key]
 
 _VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 
@@ -61,7 +74,7 @@ _VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
     },
 })
 def todo(todos: list = None, merge: bool = False) -> str:
-    global _items
+    items = _bucket()
 
     if todos is None:
         return _format_output()
@@ -69,14 +82,14 @@ def todo(todos: list = None, merge: bool = False) -> str:
     validated = _validate(todos)
 
     if merge:
-        existing_ids = {item["id"]: i for i, item in enumerate(_items)}
+        existing_ids = {item["id"]: i for i, item in enumerate(items)}
         for item in validated:
             if item["id"] in existing_ids:
-                _items[existing_ids[item["id"]]] = item
+                items[existing_ids[item["id"]]] = item
             else:
-                _items.append(item)
+                items.append(item)
     else:
-        _items = validated
+        items[:] = validated
 
     return _format_output()
 
@@ -103,17 +116,17 @@ def _validate(todos: list) -> list[dict]:
 
 
 def _format_output() -> str:
+    items = _bucket()
     summary = {
-        "total": len(_items),
-        "pending": sum(1 for i in _items if i["status"] == "pending"),
-        "in_progress": sum(1 for i in _items if i["status"] == "in_progress"),
-        "completed": sum(1 for i in _items if i["status"] == "completed"),
-        "cancelled": sum(1 for i in _items if i["status"] == "cancelled"),
+        "total": len(items),
+        "pending": sum(1 for i in items if i["status"] == "pending"),
+        "in_progress": sum(1 for i in items if i["status"] == "in_progress"),
+        "completed": sum(1 for i in items if i["status"] == "completed"),
+        "cancelled": sum(1 for i in items if i["status"] == "cancelled"),
     }
-    return json.dumps({"todos": _items, "summary": summary}, ensure_ascii=False, indent=2)
+    return json.dumps({"todos": items, "summary": summary}, ensure_ascii=False, indent=2)
 
 
 def reset():
-    """清空任务列表（session 切换时调用）。"""
-    global _items
-    _items = []
+    """清空所有会话的任务列表（测试用）。"""
+    _items_map.clear()

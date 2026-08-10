@@ -3,8 +3,10 @@ bash 工具：在本地 shell 中执行命令，返回 stdout + stderr。
 超时时间默认 30 秒，防止命令挂起。
 """
 
+import os
 import subprocess
 from minihermes.core.tools import register
+from minihermes.core.agent import runtime_ctx
 
 _MAX_OUTPUT_CHARS = 50_000
 
@@ -39,12 +41,15 @@ _SCHEMA = {
 @register(_SCHEMA)
 def bash(command: str, timeout: int = 30) -> str:
     try:
+        # 桌面端按会话绑定目录执行（thread-local cwd）；CLI 无 thread-local → 进程 cwd
+        run_cwd = runtime_ctx.current_cwd() or os.getcwd()
         result = subprocess.run(
             command,
             shell=True,
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=run_cwd,
         )
         output = ""
         if result.stdout:

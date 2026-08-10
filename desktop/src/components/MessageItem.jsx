@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github.css'; // 浅色语法高亮主题（Vite 打包注入）
 import ToolCallCard from './ToolCallCard.jsx';
 import TodoCard from './TodoCard.jsx';
 import MermaidDiagram from './MermaidDiagram.jsx';
@@ -49,9 +51,48 @@ function rehypeCollapseWhitespace() {
   return walk;
 }
 
+/** remark 插件：段落内软换行（单个 \n）→ 硬换行（<br>）。中文 LLM 输出常用单个换行做行断，
+ *  默认 markdown 会把软换行塌陷成空格、连成一段；按换行把 text 节点拆成
+ *  [text, break(hName: br), …]，保留单换行可读性。同时容器改用 white-space: normal，
+ *  块元素间的空白文本不再被二次渲染成空行（行距收紧）。
+ *  mdast 的 code / inlineCode 节点用 value 属性、无 text 子节点，天然不受影响。 */
+function remarkBreaks() {
+  return (tree) => {
+    const walk = (node) => {
+      if (!node || !Array.isArray(node.children)) return;
+      const out = [];
+      for (const child of node.children) {
+        if (child.type === 'text' && child.value && /\n/.test(child.value)) {
+          const parts = child.value.split(/(\r\n|\r|\n)/);
+          for (const part of parts) {
+            if (part === '\n' || part === '\r\n' || part === '\r') {
+              out.push({ type: 'break', data: { hName: 'br' } });
+            } else if (part !== '') {
+              out.push({ type: 'text', value: part });
+            }
+          }
+        } else {
+          out.push(child);
+        }
+        walk(child);
+      }
+      node.children = out;
+    };
+    walk(tree);
+  };
+}
+
 /** rehype 管道：raw（模型可输出内联 HTML 图）→ sanitize（剥脚本/事件/javascript:）
+ *  → 语法高亮（rehype-highlight，插在 sanitize 后，高亮产生的 hljs class 不会被剥除）
  *  → 空白折叠（修复 rehype-raw 在表格周围注入巨型空行的 bug）。顺序固定。 */
-const REHYPE_PLUGINS = [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeCollapseWhitespace];
+const REHYPE_PLUGINS = [
+  rehypeRaw,
+  [rehypeSanitize, sanitizeSchema],
+  rehypeHighlight,
+  rehypeCollapseWhitespace,
+];
+
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 
 /** DeepSeek 风格鲸鱼头像（SVG） */
 export function WhaleAvatar({ size = 28 }) {
@@ -172,7 +213,7 @@ function renderSubagentPart(p, i, live) {
   return (
     <div key={i} className="msg-content markdown subagent-text">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         components={buildMdComponents(live)}
       >
@@ -216,7 +257,8 @@ function SubagentCard({ part, live }) {
 function buildMdComponents(live) {
   return {
     code({ className, children, node, ...props }) {
-      if (className === 'language-mermaid') {
+      // rehype-highlight 会给 code 追加 hljs class（如 `hljs language-mermaid`），用 includes 匹配
+      if (className && className.includes('language-mermaid')) {
         const raw = String(
           node && node.children && node.children[0] ? node.children[0].value : (children || '')
         );
@@ -322,7 +364,7 @@ export default function MessageItem({ msg, isLast, streaming }) {
           return (
             <div key={i} className="msg-content markdown">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={REMARK_PLUGINS}
                 rehypePlugins={REHYPE_PLUGINS}
                 components={buildMdComponents(live)}
               >

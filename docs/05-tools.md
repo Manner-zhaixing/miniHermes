@@ -165,4 +165,5 @@ def truncate_output(text: str, max_chars: int = MAX_OUTPUT_CHARS) -> str:
 - **全局截断**：防止工具输出污染上下文，保证 LLM 看见完整格式
 - **审批分层**：硬拦截永不执行，软拦截可授权 session 级别
 - **重试隔离**：重试与执行分离，不影响 Agent 循环逻辑
+- **会话绑定 cwd**：`bash` 的 `subprocess.run(..., cwd=...)` 与 `files` 的相对路径解析（`_resolve_path`）都按 `runtime_ctx.current_cwd() or os.getcwd()` 锚定——桌面端不同目录的会话可并行安全执行（thread-local cwd 每 turn 注入）；CLI 无 thread-local → 回退进程 cwd，行为逐字节不变。绝对路径与 `~` 展开不受 thread-local 影响
 

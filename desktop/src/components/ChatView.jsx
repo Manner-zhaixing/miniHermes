@@ -31,12 +31,12 @@ function withDividers(messages) {
 }
 
 export default function ChatView({
-  messages, streaming, activeSid, cwd, providerInfo,
+  messages, streaming, activeSid, cwd, cwdLocked = false, providerInfo,
   tokens = { input: 0, output: 0, reasoning: 0 },
   fileCount, filesPanelOpen, onToggleFiles,
   onSend, onInterrupt, onTitleEdited,
   onCommand, commands = [], stopRequested = false,
-  onChangeCwd, mode = 'normal', onModeChange, onModelChange,
+  onChangeCwd, onModelChange,
   activePersona = null, onOpenExperts,
 }) {
   const [draft, setDraft] = useState('');
@@ -46,8 +46,6 @@ export default function ChatView({
   const STICK_TOLERANCE = 80;
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
-  const modeMenuRef = useRef(null);
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
 
   // 思考强度：每轮覆盖选择器。切换厂商时重置为厂商默认；同厂商刷新不打扰用户选择
   const [thinkingEffort, setThinkingEffort] = useState(providerInfo?.thinking_effort || 'max');
@@ -59,18 +57,6 @@ export default function ChatView({
       setThinkingEffort(providerInfo.thinking_effort || 'max');
     }
   }, [providerInfo]);
-
-  // 点击模式选择器外部时关闭
-  useEffect(() => {
-    if (!modeMenuOpen) return;
-    const onDocClick = (e) => {
-      if (modeMenuRef.current && !modeMenuRef.current.contains(e.target)) {
-        setModeMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [modeMenuOpen]);
 
   // 切换会话时重置吸附状态（避免沿用上个会话的「已上滑」标记）
   useEffect(() => {
@@ -149,9 +135,6 @@ export default function ChatView({
     setDraft('');
     if (text.startsWith('/')) {
       onCommand(text);
-    } else if (mode === 'plan') {
-      // Plan 模式：自动注入 __PLAN_MODE__: 前缀，后端进入只读规划流程
-      onSend(`__PLAN_MODE__:${text}`);
     } else {
       // 普通模式：携带每轮思考强度覆盖
       onSend(text, { thinking_effort: thinkingEffort });
@@ -197,9 +180,14 @@ export default function ChatView({
 
   return (
     <div className="chat-view">
-      {/* 顶部工具栏：工作目录选择器 */}
+      {/* 顶部工具栏：工作目录选择器（当前会话已有消息 → 锁定置灰，守卫 A） */}
       <div className="chat-toolbar">
-        <button className={`cwd-picker ${cwd ? '' : 'empty'}`} onClick={onChangeCwd} title="选择工作目录（Agent 的工具/文件操作基于此目录）">
+        <button
+          className={`cwd-picker ${cwd ? '' : 'empty'} ${cwdLocked ? 'locked' : ''}`}
+          onClick={onChangeCwd}
+          disabled={cwdLocked}
+          title={cwdLocked ? '当前会话已有消息，无法切换工作目录（请新建会话）' : '选择工作目录（Agent 的工具/文件操作基于此目录）'}
+        >
           <span className="cwd-picker-ic">📁</span>
           <span className="cwd-picker-path">{cwd || '选择工作目录…'}</span>
           <span className="cwd-picker-btn">切换</span>
@@ -299,43 +287,6 @@ export default function ChatView({
             <button className="attach-btn" onClick={onAttachFile} title="上传文件（以 @file 引用注入）">
               <span className="attach-ic">📎</span>
             </button>
-            <div className="mode-picker" ref={modeMenuRef}>
-              <button
-                className={`mode-trigger ${mode === 'plan' ? 'plan' : ''}`}
-                onClick={() => setModeMenuOpen((v) => !v)}
-                title="对话模式：普通 或 Plan（先只读分析并生成实施计划，审批后执行）"
-              >
-                <span className="mode-trigger-ic">{mode === 'plan' ? '📋' : '⚡'}</span>
-                <span className="mode-trigger-label">{mode === 'plan' ? 'Plan 模式' : '普通模式'}</span>
-                <span className={`mode-chevron ${modeMenuOpen ? 'open' : ''}`}>▾</span>
-              </button>
-              {modeMenuOpen && (
-                <div className="mode-menu">
-                  <button
-                    className={`mode-menu-item ${mode === 'normal' ? 'active' : ''}`}
-                    onClick={() => { onModeChange('normal'); setModeMenuOpen(false); }}
-                  >
-                    <span className="mode-menu-ic">⚡</span>
-                    <span className="mode-menu-text">
-                      <span className="mode-menu-title">普通模式</span>
-                      <span className="mode-menu-desc">直接执行指令，Agent 自主调用工具</span>
-                    </span>
-                    {mode === 'normal' && <span className="mode-menu-check">✓</span>}
-                  </button>
-                  <button
-                    className={`mode-menu-item ${mode === 'plan' ? 'active' : ''}`}
-                    onClick={() => { onModeChange('plan'); setModeMenuOpen(false); }}
-                  >
-                    <span className="mode-menu-ic">📋</span>
-                    <span className="mode-menu-text">
-                      <span className="mode-menu-title">Plan 模式</span>
-                      <span className="mode-menu-desc">先只读分析生成实施计划，审批后执行</span>
-                    </span>
-                    {mode === 'plan' && <span className="mode-menu-check">✓</span>}
-                  </button>
-                </div>
-              )}
-            </div>
             <select
               className="model-select"
               value={providerInfo?.model || ''}

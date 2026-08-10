@@ -51,6 +51,7 @@ def session_to_ui(s: dict, tokens: dict | None = None) -> dict:
         "tool_call_count": s.get("tool_call_count", 0),
         "parent_session_id": s.get("parent_session_id"),
         "persona_id": s.get("persona_id") or "",
+        "cwd": s.get("cwd") or "",
         "tokens": tokens or {"input": 0, "output": 0, "reasoning": 0},
     }
 

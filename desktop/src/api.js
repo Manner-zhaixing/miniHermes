@@ -139,7 +139,7 @@ export class BackendClient {
   getTools() { return this.get('/api/tools'); }
   getCommands() { return this.get('/api/commands'); }
   getCwd() { return this.get('/api/cwd'); }
-  setCwd(path) { return this.post('/api/cwd', { path }); }
+  setCwd(path, sessionId) { return this.post('/api/cwd', { path, session_id: sessionId || null }); }
   setTitle(sid, title) { return this.post(`/api/sessions/${sid}/title`, { title }); }
   deleteSession(sid) { return this.del(`/api/sessions/${sid}`); }
   getSessionFiles(sid) { return this.get(`/api/sessions/${sid}/files`); }

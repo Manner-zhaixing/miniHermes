@@ -2,8 +2,22 @@
 文件操作工具：read_file / write_file / list_dir。
 """
 
+import os
 from pathlib import Path
 from minihermes.core.tools import register
+from minihermes.core.agent import runtime_ctx
+
+
+def _resolve_path(path: str) -> Path:
+    """解析工具路径：绝对路径 / ~ 直接返回；相对路径按会话绑定目录锚定。
+
+    桌面端不同目录的会话可并行执行——相对路径必须指向该会话绑定的目录，
+    而不是进程全局 cwd。CLI 无 thread-local cwd → 回退 os.getcwd()（行为不变）。
+    """
+    p = Path(path).expanduser()
+    if p.is_absolute():
+        return p
+    return (Path(runtime_ctx.current_cwd() or os.getcwd()) / p).resolve()
 
 
 # ── read_file ────────────────────────────────────────────────────────────────
@@ -53,7 +67,7 @@ def _add_line_numbers(lines: list[str], start: int) -> str:
 })
 def read_file(path: str, offset: int = 1, limit: int = 500) -> str:
     try:
-        p = Path(path).expanduser()
+        p = _resolve_path(path)
         if not p.exists():
             return f"Error: file not found: {path}"
         if not p.is_file():
@@ -160,7 +174,7 @@ def write_file(path: str, content: str, append: bool = False) -> str:
             f"with append=true. Split on natural boundaries (paragraph / function / section breaks)."
         )
     try:
-        p = Path(path).expanduser()
+        p = _resolve_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         mode = "a" if append else "w"
         with open(p, mode, encoding="utf-8") as f:
@@ -198,7 +212,7 @@ def write_file(path: str, content: str, append: bool = False) -> str:
 })
 def list_dir(path: str = ".", show_hidden: bool = False) -> str:
     try:
-        p = Path(path).expanduser()
+        p = _resolve_path(path)
         if not p.exists():
             return f"Error: path not found: {path}"
         if not p.is_dir():

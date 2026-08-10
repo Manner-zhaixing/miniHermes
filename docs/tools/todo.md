@@ -1,6 +1,11 @@
 # todo — 任务列表管理
 
-代码: `tools/todo.py` (119行)
+代码: `tools/todo.py`
+
+> 多会话并行（桌面后端）：任务列表按「线程当前会话」隔离分桶
+> （`_items_map` 以 `runtime_ctx.current_sid()` 为键，未设置走 `""`）。
+> 每个会话的 turn 跑在独立线程，thread-local 注入当前 sid，不同会话的
+> todo 互不污染；CLI 单会话恒走 `""` 桶，行为不变。
 
 ---
 

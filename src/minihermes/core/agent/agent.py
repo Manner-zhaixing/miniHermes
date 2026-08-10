@@ -13,6 +13,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from minihermes.core import tools as tool_registry
@@ -26,6 +27,7 @@ from minihermes.core.context.compressor import ContextCompressor
 from minihermes.core.context import ConversationContext
 from minihermes.core.personas import build_team_roster
 from minihermes.core.personas.manifest import PersonaManifest
+from minihermes.core.agent import runtime_ctx
 
 
 # 最大迭代次数写死（不再读 config.agent.max_iterations）：
@@ -55,6 +57,7 @@ class Agent:
         system_prompt_override: str | None = None,
         max_iterations_override: int | None = None,
         persona: Optional[PersonaManifest] = None,
+        cwd: str | None = None,
     ):
         self.provider = provider
         self.db = db
@@ -68,6 +71,9 @@ class Agent:
         self.persona_id = persona.id if persona else ""
         # team 主理人花名册（仅 team 型非空）
         self.team_roster = build_team_roster(persona) if (persona and persona.is_team()) else None
+
+        # 会话绑定的工作目录（桌面端会话级 cwd；CLI 未传 → os.getcwd()）
+        self.cwd: str = cwd or os.getcwd()
 
         # system prompt：支持外部覆盖（子 Agent 使用精简 prompt）
         if system_prompt_override is not None:
@@ -144,7 +150,9 @@ class Agent:
         """
         memory_store = memory_store or get_memory_store()
         tool_names = tool_names or tool_registry.get_tool_manager().get_names()
-        cwd = cwd or os.getcwd()
+        # 显式 cwd= 才重绑定；否则沿用 self.cwd（绑定目录），无绑定（CLI）回退进程 cwd
+        cwd = cwd or self.cwd or os.getcwd()
+        self.cwd = cwd
         p = persona if persona is not None else self.persona
         roster = team_roster if team_roster is not None else self.team_roster
         self.system_prompt = build_system_prompt(
@@ -391,10 +399,14 @@ class Agent:
             return None
         write_path = args.get("path", "")
         try:
-            if not os.path.isfile(write_path):
+            # 相对路径按当前线程会话绑定目录解析（无 thread-local cwd 时回退进程 cwd）
+            p = Path(write_path).expanduser()
+            if not p.is_absolute():
+                p = Path(runtime_ctx.current_cwd() or os.getcwd()) / p
+            if not p.is_file():
                 return None
             lines: list[str] = []
-            with open(write_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     if len(line) > Agent._MAX_SNAPSHOT_LINE_CHARS:
                         line = line[:Agent._MAX_SNAPSHOT_LINE_CHARS] + "......\n"

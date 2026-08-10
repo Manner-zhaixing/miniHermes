@@ -7,7 +7,6 @@ import SettingsView from './components/SettingsView.jsx';
 import SkillsView from './components/SkillsView.jsx';
 import ApprovalModal from './components/ApprovalModal.jsx';
 import ClarifyModal from './components/ClarifyModal.jsx';
-import PlanApprovalModal from './components/PlanApprovalModal.jsx';
 import FilesPanel from './components/FilesPanel.jsx';
 import ExpertsView from './components/ExpertsView.jsx';
 
@@ -37,13 +36,14 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [activeSid, setActiveSid] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [streaming, setStreaming] = useState(false);
+  const [messagesBySid, setMessagesBySid] = useState({}); // sid -> Message[]（每会话独立消息流）
+  const [streamingSids, setStreamingSids] = useState({});  // sid -> bool（每会话流式状态）
   const [error, setError] = useState(null);
   const [approval, setApproval] = useState(null);
   const [clarify, setClarify] = useState(null);
   const [providerInfo, setProviderInfo] = useState(null);
   const [cwd, setCwd] = useState('');
+  const [defaultCwd, setDefaultCwd] = useState(''); // 「默认」目录（侧栏分组锚点）
   const [sessionFiles, setSessionFiles] = useState({}); // sid -> [{path, tool}]
   const [filesPanelOpen, setFilesPanelOpen] = useState(true);
   const [toast, setToast] = useState(null);
@@ -53,55 +53,64 @@ export default function App() {
   const stopRequestedRef = useRef(false);
   const interruptRetryRef = useRef(null);
   const [compressing, setCompressing] = useState(false);
-  const [mode, setMode] = useState('normal'); // 'normal' | 'plan'
-  const [planApproval, setPlanApproval] = useState(null);
   const [personas, setPersonas] = useState([]); // manifest 数组（GET /api/personas）
   const personasByIdRef = useRef({});           // id -> manifest 快速查表
   const pendingInitPromptRef = useRef('');      // 应用专家后待发送的 default_init_prompt
 
-  const messagesRef = useRef(messages);
+  const messagesBySidRef = useRef({});       // 消息流真实存储（ref 为准，后台会话不触发渲染）
+  const streamingSidsRef = useRef({});       // 流式状态镜像（ref 为准，避免后台流式引发重渲染）
   const activeSidRef = useRef(activeSid);
-  const streamingRef = useRef(false);
   const sessionWaitersRef = useRef([]);
   const clientRef = useRef(null);
+  const pendingRequestsRef = useRef([]);     // 后台会话待处理的 clarify/approval 请求（切回时弹出）
 
-  const setStreamingBoth = useCallback((v) => {
-    streamingRef.current = v;
-    setStreaming(v);
+  /** 每会话流式状态：写 ref（真实），仅激活会话同步到 state 触发渲染 */
+  const setSessionStreaming = useCallback((sid, v) => {
+    streamingSidsRef.current = { ...streamingSidsRef.current, [sid]: !!v };
+    if (sid === activeSidRef.current) setStreamingSids(streamingSidsRef.current);
   }, []);
 
-  /** 会话隔离：流式事件只处理当前活跃会话的 */
-  const isCurrentSession = useCallback((sid) => {
-    return !sid || sid === activeSidRef.current;
+  /** 切回会话时一次性把 ref 流式状态同步进 state（后台流式态需要可见） */
+  const syncStreamingToState = useCallback(() => {
+    setStreamingSids({ ...streamingSidsRef.current });
   }, []);
 
-  const syncMessages = useCallback((next) => {
-    messagesRef.current = next;
-    setMessages(next);
+  /** 每会话消息流更新：只写 ref；仅激活会话触发 React 渲染（后台高频 delta 不重渲染） */
+  const updateFor = useCallback((sid, fn) => {
+    const cur = messagesBySidRef.current;
+    const arr = cur[sid] || [];
+    const next = fn(arr);
+    if (next === arr) return; // fn 未产生新数组（无变化）
+    messagesBySidRef.current = { ...cur, [sid]: next };
+    if (sid === activeSidRef.current) setMessagesBySid(messagesBySidRef.current);
   }, []);
 
-  const pushMessage = useCallback((msg) => {
-    syncMessages([...messagesRef.current, msg]);
-  }, [syncMessages]);
+  /** 判断某会话是否在流式生成中（ref 为准，供动作守卫用） */
+  const isStreaming = useCallback((sid) => !!streamingSidsRef.current[sid], []);
 
-  /** 推送一条系统消息（命令结果等） */
-  const pushSystem = useCallback((text) => {
-    syncMessages([...messagesRef.current, {
-      id: uid(), role: 'system', content: text, ts: Date.now(),
-    }]);
-  }, [syncMessages]);
+  /** 向指定会话推一条消息（默认当前激活会话） */
+  const pushMessage = useCallback((msg, sid) => {
+    const target = sid || activeSidRef.current;
+    if (!target) return;
+    updateFor(target, (msgs) => [...msgs, msg]);
+  }, [updateFor]);
 
-  /** 更新最后一条 assistant 消息（流式累积） */
-  const patchLastAssistant = useCallback((fn) => {
-    const msgs = [...messagesRef.current];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'assistant') {
-        msgs[i] = fn(msgs[i]);
+  /** 推送一条系统消息（命令结果等，可指定会话） */
+  const pushSystem = useCallback((text, sid) => {
+    pushMessage({ id: uid(), role: 'system', content: text, ts: Date.now() }, sid);
+  }, [pushMessage]);
+
+  /** 纯函数：更新最后一条 assistant 消息（流式累积） */
+  const patchLastAssistantIn = useCallback((msgs, fn) => {
+    const next = [...msgs];
+    for (let i = next.length - 1; i >= 0; i--) {
+      if (next[i].role === 'assistant') {
+        next[i] = fn(next[i]);
         break;
       }
     }
-    syncMessages(msgs);
-  }, [syncMessages]);
+    return next;
+  }, []);
 
   /** 追加有序片段：thinking/text 连续时合并，类型切换时新开片段 */
   const appendPart = useCallback((msg, part) => {
@@ -115,24 +124,24 @@ export default function App() {
     return { ...msg, parts };
   }, []);
 
-  /** 对最后一条「运行中」的 subagent part 应用 fn（子代理事件累积） */
-  const patchLastSubagent = useCallback((fn) => {
-    const msgs = [...messagesRef.current];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
+  /** 纯函数：对最后一条「运行中」的 subagent part 应用 fn（子代理事件累积） */
+  const patchLastSubagentIn = useCallback((msgs, fn) => {
+    const next = [...msgs];
+    for (let i = next.length - 1; i >= 0; i--) {
+      const m = next[i];
       if (m.role !== 'assistant') continue;
       const parts = m.parts || [];
       for (let j = parts.length - 1; j >= 0; j--) {
         if (parts[j].type === 'subagent' && parts[j].status === 'running') {
           const copy = [...parts];
           copy[j] = fn(parts[j]);
-          msgs[i] = { ...m, parts: copy };
-          syncMessages(msgs);
-          return;
+          next[i] = { ...m, parts: copy };
+          return next;
         }
       }
     }
-  }, [syncMessages]);
+    return next;
+  }, []);
 
   /** 等待会话创建（new_session 的应答） */
   const ensureSession = useCallback(() => {
@@ -161,12 +170,22 @@ export default function App() {
 
         client.on('sessions', (d) => setSessions(d.sessions || []));
 
+        // 恢复其他目录会话时后端自动导航 → 更新 cwd 状态
+        client.on('cwd_changed', (d) => {
+          setCwd(d.cwd || '');
+          if (d.default_cwd) setDefaultCwd(d.default_cwd);
+        });
+
         client.on('session_created', (d) => {
           const sid = d.session_id;
           activeSidRef.current = sid;
           setActiveSid(sid);
-          syncMessages([]);
-          setStreamingBoth(false);
+          // 初始化该会话的消息流（不影响其他会话的 bucket）
+          if (!messagesBySidRef.current[sid]) {
+            messagesBySidRef.current[sid] = [];
+            setMessagesBySid({ ...messagesBySidRef.current });
+          }
+          setSessionStreaming(sid, false);
           setSessionFiles((prev) => ({ ...prev, [sid]: [] }));
           sessionWaitersRef.current.forEach((w) => w(sid));
           sessionWaitersRef.current = [];
@@ -175,7 +194,7 @@ export default function App() {
           pendingInitPromptRef.current = '';
           if (initPrompt) {
             // 与 sendMessage 一致：先推一条 user 消息进消息流，再发送（后端不广播用户消息）
-            pushMessage({ id: uid(), role: 'user', content: initPrompt, ts: Date.now() });
+            pushMessage({ id: uid(), role: 'user', content: initPrompt, ts: Date.now() }, sid);
             setTimeout(() => {
               if (clientRef.current) {
                 clientRef.current.send({
@@ -189,18 +208,24 @@ export default function App() {
         });
 
         client.on('session_messages', (d) => {
-          activeSidRef.current = d.session_id;
-          setActiveSid(d.session_id);
-          syncMessages(convertDbMessages(d.messages || []));
-          setStreamingBoth(false);
+          const sid = d.session_id;
+          activeSidRef.current = sid;
+          setActiveSid(sid);
+          // 切回连续性：本地已有 bucket（在途/历史流式态）→ 保留，不覆盖；
+          // 仅当该会话本地无 bucket（首次进入）才从 DB 全量加载
+          if (!messagesBySidRef.current[sid]) {
+            updateFor(sid, () => convertDbMessages(d.messages || []));
+          }
+          setSessionStreaming(sid, !!d.busy);
+          syncStreamingToState();
           // 拉取该会话的历史成果文件（从 DB 推导）
-          client.getSessionFiles(d.session_id)
-            .then((r) => setSessionFiles((prev) => ({ ...prev, [d.session_id]: r.files || [] })))
+          client.getSessionFiles(sid)
+            .then((r) => setSessionFiles((prev) => ({ ...prev, [sid]: r.files || [] })))
             .catch(() => {});
         });
 
         client.on('file_written', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
+          // 成果文件本就按 sid 存储，无需会话守卫
           setSessionFiles((prev) => {
             const list = prev[d.session_id] || [];
             const exists = list.some((f) => f.path === d.path);
@@ -212,129 +237,146 @@ export default function App() {
         });
 
         client.on('turn_start', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          setStreamingBoth(true);
-          pushMessage({
+          setSessionStreaming(d.session_id, true);
+          // 侧栏需看到后台会话的流式态：按 turn 边界把 ref 全量镜像到 state（非 per-token，开销可接受）
+          setStreamingSids({ ...streamingSidsRef.current });
+          updateFor(d.session_id, (msgs) => [...msgs, {
             id: uid(), role: 'assistant', parts: [], ts: Date.now(),
-          });
+          }]);
         });
 
         client.on('thinking', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastAssistant((m) => appendPart(m, { type: 'thinking', text: d.text }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastAssistantIn(msgs, (m) => appendPart(m, { type: 'thinking', text: d.text })));
         });
 
         client.on('delta', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastAssistant((m) => appendPart(m, { type: 'text', text: d.text }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastAssistantIn(msgs, (m) => appendPart(m, { type: 'text', text: d.text })));
         });
 
         client.on('tool_start', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastAssistant((m) => appendPart(m, {
-            type: 'tool', name: d.tool_name, status: 'running', args: '', result: '',
-          }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastAssistantIn(msgs, (m) => appendPart(m, {
+              type: 'tool', name: d.tool_name, status: 'running', args: '', result: '',
+            })));
         });
 
         client.on('tool_result', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastAssistant((m) => {
-            const parts = [...m.parts];
-            for (let i = parts.length - 1; i >= 0; i--) {
-              if (parts[i].type === 'tool' && parts[i].name === d.tool_name && parts[i].status === 'running') {
-                parts[i] = { ...parts[i], status: d.status === 'error' ? 'error' : 'done', result: d.result };
-                break;
+          updateFor(d.session_id, (msgs) =>
+            patchLastAssistantIn(msgs, (m) => {
+              const parts = [...m.parts];
+              for (let i = parts.length - 1; i >= 0; i--) {
+                if (parts[i].type === 'tool' && parts[i].name === d.tool_name && parts[i].status === 'running') {
+                  parts[i] = { ...parts[i], status: d.status === 'error' ? 'error' : 'done', result: d.result };
+                  break;
+                }
               }
-            }
-            return { ...m, parts };
-          });
+              return { ...m, parts };
+            }));
         });
 
         // ── 子代理事件（默认折叠，点击展开查看全部过程）──────────────────
         client.on('subagent_start', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastAssistant((m) => appendPart(m, {
-            type: 'subagent', subagentId: d.subagent_id, task: d.task || '',
-            status: 'running', parts: [], open: false,
-          }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastAssistantIn(msgs, (m) => appendPart(m, {
+              type: 'subagent', subagentId: d.subagent_id, task: d.task || '',
+              status: 'running', parts: [], open: false,
+            })));
         });
 
         client.on('subagent_thinking', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastSubagent((sa) => ({
-            ...sa,
-            parts: appendPart({ parts: sa.parts }, { type: 'thinking', text: d.text }).parts,
-          }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastSubagentIn(msgs, (sa) => ({
+              ...sa,
+              parts: appendPart({ parts: sa.parts }, { type: 'thinking', text: d.text }).parts,
+            })));
         });
 
         client.on('subagent_delta', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastSubagent((sa) => ({
-            ...sa,
-            parts: appendPart({ parts: sa.parts }, { type: 'text', text: d.text }).parts,
-          }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastSubagentIn(msgs, (sa) => ({
+              ...sa,
+              parts: appendPart({ parts: sa.parts }, { type: 'text', text: d.text }).parts,
+            })));
         });
 
         client.on('subagent_tool_start', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastSubagent((sa) => ({
-            ...sa,
-            parts: [...sa.parts, {
-              type: 'tool', name: d.tool_name, status: 'running', args: '', result: '',
-            }],
-          }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastSubagentIn(msgs, (sa) => ({
+              ...sa,
+              parts: [...sa.parts, {
+                type: 'tool', name: d.tool_name, status: 'running', args: '', result: '',
+              }],
+            })));
         });
 
         client.on('subagent_tool_result', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastSubagent((sa) => {
-            const parts = [...sa.parts];
-            for (let i = parts.length - 1; i >= 0; i--) {
-              if (parts[i].type === 'tool' && parts[i].name === d.tool_name && parts[i].status === 'running') {
-                parts[i] = { ...parts[i], status: d.status === 'error' ? 'error' : 'done', result: d.result };
-                break;
+          updateFor(d.session_id, (msgs) =>
+            patchLastSubagentIn(msgs, (sa) => {
+              const parts = [...sa.parts];
+              for (let i = parts.length - 1; i >= 0; i--) {
+                if (parts[i].type === 'tool' && parts[i].name === d.tool_name && parts[i].status === 'running') {
+                  parts[i] = { ...parts[i], status: d.status === 'error' ? 'error' : 'done', result: d.result };
+                  break;
+                }
               }
-            }
-            return { ...sa, parts };
-          });
+              return { ...sa, parts };
+            }));
         });
 
         client.on('subagent_end', (d) => {
-          if (!isCurrentSession(d.session_id)) return;
-          patchLastSubagent((sa) => ({ ...sa, status: 'done' }));
+          updateFor(d.session_id, (msgs) =>
+            patchLastSubagentIn(msgs, (sa) => ({ ...sa, status: 'done' })));
         });
 
         client.on('turn_end', (d) => {
-          // 不检查 sid：上下文压缩可能产生新的 session_id，此时若不复位
-          // streaming 状态会卡死（无法发送下一条消息）。turn_start 已有
-          // 会话隔离，这里仅负责复位。
-          setStreamingBoth(false);
-          setStopRequested(false);
-          stopRequestedRef.current = false;
-          clearTimeout(interruptRetryRef.current);
-          // 压缩可能产生新会话：前端跟随新的 session_id
-          if (d.session_id && d.session_id !== activeSidRef.current) {
-            activeSidRef.current = d.session_id;
-            setActiveSid(d.session_id);
-            client.getSessionFiles(d.session_id)
-              .then((r) => setSessionFiles((prev) => ({ ...prev, [d.session_id]: r.files || [] })))
-              .catch(() => {});
+          const resultSid = d.session_id;
+          const origSid = d.orig_session_id || resultSid;
+          // 压缩可能产生新会话：把该轮消息流 bucket 从 orig 迁移到 result，跟随新 sid
+          if (resultSid && resultSid !== origSid && messagesBySidRef.current[origSid]) {
+            const migrated = messagesBySidRef.current[origSid];
+            const rest = { ...messagesBySidRef.current };
+            delete rest[origSid];
+            rest[resultSid] = migrated;
+            messagesBySidRef.current = rest;
+            streamingSidsRef.current = { ...streamingSidsRef.current, [resultSid]: false, [origSid]: false };
+            if (activeSidRef.current === origSid) {
+              activeSidRef.current = resultSid;
+              setActiveSid(resultSid);
+              client.getSessionFiles(resultSid)
+                .then((r) => setSessionFiles((prev) => ({ ...prev, [resultSid]: r.files || [] })))
+                .catch(() => {});
+            }
+            setMessagesBySid({ ...rest });
+            setStreamingSids({ ...streamingSidsRef.current });
+          } else {
+            setSessionStreaming(resultSid || origSid, false);
+            setStreamingSids({ ...streamingSidsRef.current });
+          }
+          // 仅激活会话复位 stop 状态（后台会话各自独立）
+          if (resultSid === activeSidRef.current || origSid === activeSidRef.current) {
+            setStopRequested(false);
+            stopRequestedRef.current = false;
+            clearTimeout(interruptRetryRef.current);
           }
         });
 
-        client.on('compress_start', () => {
-          setCompressing(true);
+        client.on('compress_start', (d) => {
+          if (d.session_id === activeSidRef.current) setCompressing(true);
         });
 
-        client.on('compress_end', () => {
-          setCompressing(false);
-          setToast('上下文压缩完成');
-          setTimeout(() => setToast(null), 3000);
+        client.on('compress_end', (d) => {
+          if (d.session_id === activeSidRef.current) {
+            setCompressing(false);
+            setToast('上下文压缩完成');
+            setTimeout(() => setToast(null), 3000);
+          }
         });
 
         client.on('error', (d) => {
           setError(d.message || '未知错误');
-          setStreamingBoth(false);
+          if (d.session_id) setSessionStreaming(d.session_id, false);
           setTimeout(() => setError(null), 6000);
         });
 
@@ -345,12 +387,24 @@ export default function App() {
         });
 
         client.on('command_result', (d) => {
-          if (d.text) pushSystem(d.text);
+          if (d.text) pushSystem(d.text, d.session_id);
         });
 
-        client.on('clarify_request', (d) => setClarify(d));
-        client.on('approval_request', (d) => setApproval(d));
-        client.on('plan_approval_request', (d) => setPlanApproval(d));
+        // ── 审批/澄清弹窗：按会话归属——激活会话直接弹，后台会话暂存切回再弹 ──
+        client.on('clarify_request', (d) => {
+          if (d.session_id && d.session_id !== activeSidRef.current) {
+            pendingRequestsRef.current.push({ type: 'clarify', ...d });
+            return;
+          }
+          setClarify(d);
+        });
+        client.on('approval_request', (d) => {
+          if (d.session_id && d.session_id !== activeSidRef.current) {
+            pendingRequestsRef.current.push({ type: 'approval', ...d });
+            return;
+          }
+          setApproval(d);
+        });
 
         // 初始加载会话列表、配置、命令、专家
         const [sessRes, cfgRes, provRes, cmdRes, cwdRes, persRes] = await Promise.all([
@@ -369,6 +423,7 @@ export default function App() {
         setProviderInfo(deriveProviderInfo(provRes));
         // 优先用后端实时 cwd（config 可能未写入 general.cwd）
         setCwd(cwdRes?.cwd || cfgRes?.general?.cwd || '');
+        setDefaultCwd(cwdRes?.default_cwd || '');
         const cmds = cmdRes.commands || [];
         setCommands(cmds);
         commandsRef.current = cmds;
@@ -400,7 +455,7 @@ export default function App() {
 
   // 对话窗口切换模型：全局生效（等价 CLI /model），切换成功后刷新徽章
   const changeModel = useCallback(async (model) => {
-    if (!providerInfo || streamingRef.current) return;
+    if (!providerInfo || isStreaming(activeSidRef.current)) return;
     try {
       const res = await clientRef.current.setActiveModel({ provider: providerInfo.name, model });
       if (!res.ok) {
@@ -417,17 +472,17 @@ export default function App() {
   // ── 动作 ─────────────────────────────────────────────────
   const sendMessage = useCallback(async (text, options = {}) => {
     const content = text.trim();
-    if (!content || streamingRef.current) return;
+    if (!content || isStreaming(activeSidRef.current)) return;
     setError(null);
     const client = clientRef.current;
     try {
       const sid = await ensureSession();
       // 自动生成标题：第一轮且未命名
-      if (messagesRef.current.length === 0) {
+      if ((messagesBySidRef.current[sid] || []).length === 0) {
         const title = content.slice(0, 30);
         client.setTitle(sid, title);
       }
-      pushMessage({ id: uid(), role: 'user', content, ts: Date.now() });
+      pushMessage({ id: uid(), role: 'user', content, ts: Date.now() }, sid);
       const payload = { type: 'send_message', session_id: sid, content };
       // 每轮思考强度覆盖（undefined 不序列化 → 服务端走厂商默认）
       if (options.thinking_effort) payload.thinking_effort = options.thinking_effort;
@@ -435,26 +490,27 @@ export default function App() {
     } catch (e) {
       setError(e.message);
     }
-  }, [ensureSession, pushMessage]);
+  }, [ensureSession, pushMessage, isStreaming]);
 
   const interrupt = useCallback(() => {
+    // 定向停止当前激活会话（后台会话各自独立，不受影响）
+    const sid = activeSidRef.current;
     // 关键消息走排队发送，避免 WS 重连瞬间被丢弃
-    clientRef.current?.sendWhenReady({ type: 'interrupt' });
+    clientRef.current?.sendWhenReady({ type: 'interrupt', session_id: sid });
     setStopRequested(true);
     stopRequestedRef.current = true;
     // 保险：内核在"无 chunk 期间"（模型静默/工具执行中）不检查中断，
     // 3 秒未收到 turn_end 则重发一次，确保停止一定生效
     clearTimeout(interruptRetryRef.current);
     interruptRetryRef.current = setTimeout(() => {
-      if (streamingRef.current && stopRequestedRef.current) {
-        clientRef.current?.sendWhenReady({ type: 'interrupt' });
+      if (isStreaming(sid) && stopRequestedRef.current) {
+        clientRef.current?.sendWhenReady({ type: 'interrupt', session_id: sid });
       }
     }, 3000);
-  }, []);
+  }, [isStreaming]);
 
   const newSession = useCallback(() => {
-    // 若正在生成，先中断，避免旧事件串台
-    if (streamingRef.current) clientRef.current?.send({ type: 'interrupt' });
+    // 多会话并行：不再自动中断其他会话的生成
     clientRef.current?.send({ type: 'new_session' });
   }, []);
 
@@ -467,7 +523,7 @@ export default function App() {
       setError('内核未连接，无法应用专家');
       return;
     }
-    if (streamingRef.current) clientRef.current.send({ type: 'interrupt' });
+    // 多会话并行：不再自动中断其他会话的生成
     // 应用专家后自动发送 default_init_prompt（若有）
     pendingInitPromptRef.current = persona && persona.default_init_prompt
       ? persona.default_init_prompt : '';
@@ -490,19 +546,48 @@ export default function App() {
   );
 
   const resumeSession = useCallback((sid) => {
-    // 切换会话前中断正在进行的生成
-    if (streamingRef.current) clientRef.current?.send({ type: 'interrupt' });
-    clientRef.current?.send({ type: 'resume_session', session_id: sid });
-  }, []);
+    // 切回连续性：先切 activeSid + 一次性同步 ref 状态。
+    // 本地已有消息流 bucket（在途/历史）→ 保留，不发 resume（不打断后台生成、不重载）；
+    // 本地无 bucket → 向后端要该会话全量历史。不再"切前自动中断"——这是并行前提。
+    activeSidRef.current = sid;
+    setActiveSid(sid);
+    syncStreamingToState();
+    setMessagesBySid({ ...messagesBySidRef.current });
+    if (!messagesBySidRef.current[sid]) {
+      clientRef.current?.send({ type: 'resume_session', session_id: sid });
+    }
+    // 切回后弹出来自该会话的后台审批/澄清请求
+    const idx = pendingRequestsRef.current.findIndex((r) => r.session_id === sid);
+    if (idx >= 0) {
+      const [req] = pendingRequestsRef.current.splice(idx, 1);
+      if (req.type === 'clarify') setClarify(req);
+      else if (req.type === 'approval') setApproval(req);
+    }
+  }, [syncStreamingToState]);
 
   const deleteSession = useCallback(async (sid) => {
     const client = clientRef.current;
     try {
       const res = await client.deleteSession(sid);
       setSessions(res.sessions || []);
+      // 清理该会话的本地状态（消息流 / 流式标记 / 成果文件 / 后台弹窗）
+      const rest = { ...messagesBySidRef.current };
+      delete rest[sid];
+      messagesBySidRef.current = rest;
+      const srest = { ...streamingSidsRef.current };
+      delete srest[sid];
+      streamingSidsRef.current = srest;
+      setMessagesBySid({ ...rest });
+      setStreamingSids({ ...srest });
+      setSessionFiles((prev) => {
+        const f = { ...prev };
+        delete f[sid];
+        return f;
+      });
+      pendingRequestsRef.current = pendingRequestsRef.current.filter((r) => r.session_id !== sid);
       if (sid === activeSidRef.current) {
-        const rest = (res.sessions || []).filter((s) => s.id !== sid);
-        if (rest.length > 0) client.send({ type: 'resume_session', session_id: rest[0].id });
+        const remaining = (res.sessions || []).filter((s) => s.id !== sid);
+        if (remaining.length > 0) client.send({ type: 'resume_session', session_id: remaining[0].id });
         else client.send({ type: 'new_session' });
       }
     } catch (e) {
@@ -513,11 +598,6 @@ export default function App() {
   const answerApproval = useCallback((requestId, answer) => {
     clientRef.current?.send({ type: 'approval_answer', request_id: requestId, answer });
     setApproval(null);
-  }, []);
-
-  const answerPlanApproval = useCallback((requestId, answer) => {
-    clientRef.current?.send({ type: 'plan_approval_answer', request_id: requestId, answer });
-    setPlanApproval(null);
   }, []);
 
   const answerClarify = useCallback((requestId, answer) => {
@@ -533,10 +613,11 @@ export default function App() {
     } catch (_e) { /* ignore */ }
   }, []);
 
-  /** 选择并切换工作目录：系统目录选择器 → 后端 chdir → 更新状态 */
+  /** 选择并切换工作目录：系统目录选择器 → 后端 chdir（守卫 A 权威校验）→ 更新状态 */
   const changeCwd = useCallback(async () => {
-    // 当前会话已有消息时禁止切换，避免历史上下文与新目录不一致
-    if (messagesRef.current.length > 0) {
+    const sid = activeSidRef.current;
+    // 当前会话已有消息时禁止切换（前端兜底；后端按 message_count 权威校验）
+    if ((messagesBySidRef.current[sid] || []).length > 0) {
       setToast('当前会话已有消息，请新建会话后再切换工作目录');
       setTimeout(() => setToast(null), 4000);
       return;
@@ -550,9 +631,16 @@ export default function App() {
         chosen = res.paths[0];
       }
       if (!chosen) return;
-      const res = await clientRef.current.setCwd(chosen);
+      // 带上 session_id：后端守卫 A 权威校验 + 空会话跟随新目录（重绑定）
+      const res = await clientRef.current.setCwd(chosen, sid);
       if (res.ok) {
         setCwd(res.cwd);
+        if (res.default_cwd) setDefaultCwd(res.default_cwd);
+        // 空会话重绑定后目录分组可能变化，刷新会话列表
+        if (res.rebound_session_id) {
+          const s = await clientRef.current.loadSessions().catch(() => null);
+          if (s) setSessions(s.sessions || []);
+        }
         setToast(`工作目录已切换到 ${res.cwd}`);
         setTimeout(() => setToast(null), 4000);
       } else {
@@ -593,6 +681,15 @@ export default function App() {
     client.send({ type: 'command', cmd: trimmed, session_id: activeSidRef.current || '' });
   }, [newSession, resumeSession, pushSystem]);
 
+  // ── 派生（激活会话视角）──────────────────────────────
+  const streaming = !!streamingSids[activeSid];
+  const activeMessages = messagesBySid[activeSid] || [];
+  // cwd 切换锁定：当前会话已有消息（turn_start 已推 assistant → 含流式中）→ 置灰按钮
+  const cwdLocked = useMemo(
+    () => !!activeSid && (messagesBySid[activeSid] || []).length > 0,
+    [activeSid, messagesBySid],
+  );
+
   // ── 渲染 ─────────────────────────────────────────────────
   return (
     <div className="app">
@@ -603,6 +700,8 @@ export default function App() {
         providerInfo={providerInfo}
         connected={connected}
         personas={personas}
+        defaultCwd={defaultCwd}
+        streamingSids={streamingSids}
         onNewSession={newSession}
         onResume={resumeSession}
         onDelete={deleteSession}
@@ -618,10 +717,11 @@ export default function App() {
               </div>
             )}
             <ChatView
-              messages={messages}
+              messages={activeMessages}
               streaming={streaming}
               activeSid={activeSid}
               cwd={cwd}
+              cwdLocked={cwdLocked}
               onChangeCwd={changeCwd}
               providerInfo={providerInfo}
               tokens={(sessions.find((s) => s.id === activeSid) || {}).tokens || { input: 0, output: 0, reasoning: 0 }}
@@ -634,8 +734,6 @@ export default function App() {
               onInterrupt={interrupt}
               stopRequested={stopRequested}
               onTitleEdited={onTitleEdited}
-              mode={mode}
-              onModeChange={setMode}
               onModelChange={changeModel}
               activePersona={activePersona}
               onOpenExperts={openExperts}
@@ -674,12 +772,6 @@ export default function App() {
         <ClarifyModal
           request={clarify}
           onAnswer={answerClarify}
-        />
-      )}
-      {planApproval && (
-        <PlanApprovalModal
-          request={planApproval}
-          onAnswer={answerPlanApproval}
         />
       )}
     </div>
