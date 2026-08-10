@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { WhaleAvatar } from './MessageItem.jsx';
 import ProviderIcon from './ProviderIcon.jsx';
 
-const APP_VERSION = 'v0.1.0'; // 与 package.json version 保持一致
+const APP_VERSION = 'v0.1.4'; // 与 package.json version 保持一致
 
 const ICONS = {
   chat: '💬',

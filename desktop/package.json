@@ -1,6 +1,6 @@
 {
   "name": "minihermes-desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MiniHermes Desktop — 基于 minihermes 内核的 AI 桌面助手",
   "author": "minihermes",
   "main": "electron/main.js",
